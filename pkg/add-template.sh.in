@@ -1,0 +1,5 @@
+#!/bin/sh
+
+service serviced start
+/usr/local/serviced/bin/serviced add-host 172.17.42.1:4979 default
+/usr/local/serviced/bin/serviced add-template %SVCDEFS%
