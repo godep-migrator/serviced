@@ -40,6 +40,8 @@ dockerbuild: docker_ok
 	-v $(dockercache):/var/lib/docker \
 	-v `pwd`:/go/src/github.com/zenoss/serviced \
 	-v `pwd`/pkg/build/tmp:/tmp \
+	-e DOCKERCFG=$(DOCKERCFG) \
+	-e SVCDEFS=$(SVCDEFS) \
 	-e BUILD_NUMBER=$(BUILD_NUMBER) -t \
 	zenoss/serviced-build /bin/bash \
 	-c '/usr/local/bin/wrapdocker && make build_binary pkgs'

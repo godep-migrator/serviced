@@ -23,6 +23,15 @@ endef
 export DESCRIPTION
 
 INSTALL_DIR=/usr/local/serviced
+SVCDEFS ?= 
+DOCKERCFG ?=
+
+# If service definitions have been included as part of this build, use them
+ifdef SVCDEFS
+SVCDEF_SCRIPT=--after-install add-template.sh
+else
+SVCDEF_SCRIPT=
+endif
 
 .PHONY: all clean stage deb rpm
 .SILENT: desc
@@ -38,6 +47,7 @@ clean:
 	rm -f $(NAME)*.rpm
 	rm -rf pkgroot
 	rm -rf build
+	rm -f add-template.sh
 
 # Make root dir for packaging
 pkgroot:
@@ -71,6 +81,17 @@ stage: build pkgroot
 	cp ../isvcs/resources pkgroot$(INSTALL_DIR)/isvcs -R
 	cp ../isvcs/images pkgroot$(INSTALL_DIR)/ -R
 
+	# Stage service definitions if included
+	if [ -n "$(SVCDEFS)" ]; then \
+		mkdir -p pkgroot$(INSTALL_DIR)/share/services; \
+		cp -R $(SVCDEFS) pkgroot$(INSTALL_DIR)/share/services; \
+		sed -e 's|%SVCDEFS%|$(INSTALL_DIR)/share/services/*|g' add-template.sh.in > add-template.sh; \
+	fi
+
+	# Stage docker authentication if included
+	if [ -n "$(DOCKERCFG)" ]; then \
+		mkdir -p pkgroot/root && cp $(DOCKERCFG) pkgroot/root/.dockercfg; \
+	fi
 
 stage_deb: stage
 	# Stage upstart script
@@ -91,6 +112,7 @@ deb: stage_deb
 		-d apparmor-utils \
 		-d 'lxc-docker > 0.8.0' \
 		--after-install aa-workaround.sh \
+		$(SVCDEF_SCRIPT) \
 		-t deb \
 		-a x86_64 \
 		-C pkgroot \
@@ -99,7 +121,6 @@ deb: stage_deb
 		--deb-user root \
 		--deb-group root \
 		.
-#		-d "supervisor" \
 
 # Make an RPM
 rpm: stage_rpm
@@ -110,9 +131,9 @@ rpm: stage_rpm
 		-t rpm \
 		-a x86_64 \
 		-C pkgroot \
+		$(SVCDEF_SCRIPT) \
 		-m $(MAINTAINER) \
 		--description "$$DESCRIPTION" \
 		--rpm-user root \
 		--rpm-group root \
 		.
-#		-d "supervisor" \

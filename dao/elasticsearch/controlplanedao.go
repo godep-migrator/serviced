@@ -1157,6 +1157,16 @@ func (this *ControlPlaneDao) DeployTemplate(request dao.ServiceTemplateDeploymen
 		return err
 	}
 
+	// Start pulling all unique images. This is probably not the right place
+	// to do this. Could do in parallel, just getting it working.
+	imgs := dao.DockerImages(template.Services...)
+	for _, img := range imgs {
+		cmd := exec.Command("docker", "pull", img)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
+	}
+
 	volumes := make(map[string]string)
 	return this.deployServiceDefinitions(template.Services, request.TemplateId, request.PoolId, "", volumes, request.DeploymentId)
 }
