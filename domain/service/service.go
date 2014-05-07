@@ -254,6 +254,36 @@ func (s *Service) RemoveVirtualHost(application, vhostName string) error {
 	return fmt.Errorf("Unable to find application %s in service: %s", application, s.Name)
 }
 
+func (s *Service) RunCommands() []string {
+	var (
+		commands []string
+		i        int
+	)
+	if s.Runs != nil {
+		commands = make([]string, len(s.Runs))
+		for r := range s.Runs {
+			commands[i] = r
+			i++
+		}
+	}
+	return commands
+}
+
+func (s *Service) ActionCommands() []string {
+	var (
+		commands []string
+		i        int
+	)
+	if s.Actions != nil {
+		commands = make([]string, len(s.Actions))
+		for a := range s.Actions {
+			commands[i] = a
+			i++
+		}
+	}
+	return commands
+}
+
 func (se *ServiceEndpoint) SetAssignment(aa *AddressAssignment) error {
 	if se.AddressConfig.Port == 0 {
 		return errors.New("Cannot assign address to endpoint without AddressResourceConfig")
