@@ -19,34 +19,16 @@ func New(client client.Client) *Zookeeper {
 	}
 }
 
-func (z *Zookeeper) getW(msg Node) (<-chan client.Event, error) {
+func (z *Zookeeper) getW(msg *Message, f func(client.Connection, *Message) (<-chan client.Event, error)) (<-chan client.Event, error) {
 	conn, err := z.client.GetConnection()
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
-	return getW(conn, msg)
+	return f(conn, msg)
 }
 
-func (z *Zookeeper) children(msg Node) ([]string, error) {
-	conn, err := z.client.GetConnection()
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	return children(conn, msg)
-}
-
-func (z *Zookeeper) mkdir(path string) error {
-	conn, err := z.client.GetConnection()
-	if err != nil {
-		return nil
-	}
-	defer conn.Close()
-	return mkdir(conn, path)
-}
-
-func (z *Zookeeper) call(msg Node, f func(client.Connection, Node) error) error {
+func (z *Zookeeper) call(msg *Message, f func(client.Connection, *Message) error) error {
 	conn, err := z.client.GetConnection()
 	if err != nil {
 		return err
@@ -55,7 +37,7 @@ func (z *Zookeeper) call(msg Node, f func(client.Connection, Node) error) error 
 	return f(conn, msg)
 }
 
-func getW(conn client.Connection, msg Node) (<-chan client.Event, error) {
+func getW(conn client.Connection, msg *Message) (<-chan client.Event, error) {
 	p := msg.Path()
 	event, err := conn.GetW(p, msg)
 	if err != nil {
@@ -64,17 +46,28 @@ func getW(conn client.Connection, msg Node) (<-chan client.Event, error) {
 	return event, nil
 }
 
-func children(conn client.Connection, msg Node) ([]string, error) {
+func childrenW(conn client.Connection, msg *Message) (<-chan client.Event, error) {
+	p := msg.Path()
+	nodes, event, err := conn.ChildrenW(p)
+	if err != nil {
+		glog.Errorf("Unable retrieve child watch at %s: %s", p, err)
+	}
+	msg.Payload = &nodes
+	return event, nil
+}
+
+func children(conn client.Connection, msg *Message) error {
 	p := msg.Path()
 	nodes, err := conn.Children(p)
 	if err != nil {
 		glog.Errorf("Unable to retrieve children at %s: %s", p, err)
-		return nil, err
+		return err
 	}
-	return nodes, nil
+	msg.Payload = &nodes
+	return nil
 }
 
-func get(conn client.Connection, msg Node) error {
+func get(conn client.Connection, msg *Message) error {
 	p := msg.Path()
 	if err := conn.Get(p, msg); err != nil {
 		glog.Errorf("Unable to retrieve message at %s: %s", p, err)
@@ -83,21 +76,24 @@ func get(conn client.Connection, msg Node) error {
 	return nil
 }
 
-func mkdir(conn client.Connection, dirpath string) error {
-	if exists, err := conn.Exists(dirpath); err != nil && err != client.ErrNoNode {
-		return err
-	} else if exists {
-		return nil
+func mkdir(conn client.Connection, msg *Message) error {
+	var dir func(string) error
+	dir = func(p string) error {
+		if exists, err := conn.Exists(p); err != nil && err != client.ErrNoNode {
+			return err
+		} else if exists {
+			return nil
+		} else if dir(path.Dir(p)); err != nil {
+			return err
+		}
+		return conn.CreateDir(p)
 	}
-	if err := mkdir(conn, path.Dir(dirpath)); err != nil {
-		return err
-	}
-	return conn.CreateDir(dirpath)
+	return dir(msg.Path())
 }
 
-func add(conn client.Connection, msg Node) error {
+func add(conn client.Connection, msg *Message) error {
 	p := msg.Path()
-	if err := mkdir(conn, path.Dir(p)); err != nil {
+	if err := mkdir(conn, &Message{home: path.Dir(p)}); err != nil {
 		return err
 	}
 
@@ -110,7 +106,7 @@ func add(conn client.Connection, msg Node) error {
 	return nil
 }
 
-func update(conn client.Connection, msg Node) error {
+func update(conn client.Connection, msg *Message) error {
 	// if node does not exist, create
 	p := msg.Path()
 	exists, err := conn.Exists(p)
@@ -124,11 +120,11 @@ func update(conn client.Connection, msg Node) error {
 		return err
 	}
 
-	glog.V(0).Infof("Upating message at %s: %+v", p, msg.(*Message).Payload)
+	glog.V(0).Infof("Upating message at %s: %+v", p, msg.Payload)
 	return conn.Set(p, msg)
 }
 
-func remove(conn client.Connection, msg Node) error {
+func remove(conn client.Connection, msg *Message) error {
 	p := msg.Path()
 	if err := conn.Delete(p); err != nil {
 		glog.Errorf("Unable to delete message at %s: %+v", p, err)

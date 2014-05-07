@@ -49,7 +49,7 @@ func Lead(facade *facade.Facade, dao dao.ControlPlane, conn coordclient.Connecti
 				// passthru
 			}
 
-			go leader.watchSnapshotRequests()
+			go leader.watchSnapshots()
 			leader.watchServices()
 			return nil
 		}()
@@ -63,84 +63,32 @@ func snapShotName(volumeName string) string {
 	return volumeName + "_" + utc.Format(format)
 }
 
-func (l *leader) watchSnapshotRequests() {
-	glog.V(3).Info("started watchSnapshotRequestss")
-	defer glog.V(3).Info("finished watchSnapshotRequestss")
-	conn := l.conn
-	cpDao := l.dao
-	// make sure toplevel paths exist
-	paths := []string{zzk.SNAPSHOT_PATH, zzk.SNAPSHOT_REQUEST_PATH}
-	for _, path := range paths {
-		exists, err := conn.Exists(path)
-		if err != nil {
-			if err == coordclient.ErrNoNode {
-				if err := conn.CreateDir(path); err != nil {
-					glog.Errorf("Leader unable to create znode:%s error: %s", path, err)
-					return
-				}
-			} else {
-				glog.Errorf("Leader unable to get status for znode:%s error: %s", path, err)
-				return
-			}
-		}
-		if !exists {
-			if err := conn.CreateDir(path); err != nil {
-				glog.Errorf("Leader unable to create znode:%s error: %s", path, err)
-				return
-			}
-		}
-	}
+func (l *leader) watchSnapshots() {
+	glog.V(3).Info("waiting for snapshot request")
+	defer glog.V(3).Info("finished waiting for snapshots")
 
-	// watch for snapshot requests and perform snapshots
-	glog.V(0).Info("Leader watching for snapshot requests to ", zzk.SNAPSHOT_REQUEST_PATH)
+	zk := zzk.New(l.conn)
+
+	// watch for snapshots
 	for {
-		requestIds, zkEvent, err := conn.ChildrenW(zzk.SNAPSHOT_REQUEST_PATH)
+		var snapshots []*zzk.Snapshot
+		evt, err := zk.LoadSnapshotsW(&snapshots)
 		if err != nil {
-			glog.Errorf("Leader unable to watch for snapshot requests to %s error: %s", zzk.SNAPSHOT_REQUEST_PATH, err)
+			glog.Errorf("Could not watch for snapshot requests: %s", err)
 			return
 		}
-		for _, requestID := range requestIds {
-			snapshotRequest := dao.SnapshotRequest{}
-			if err := zzk.LoadSnapshotRequest(conn, requestID, &snapshotRequest); err != nil {
-				glog.Errorf("Leader unable to load snapshot request: %s  error: %s", requestID, err)
-				snapshotRequest.SnapshotError = err.Error()
-				zzk.UpdateSnapshotRequest(conn, &snapshotRequest)
+		<-evt
+		for _, snapshot := range snapshots {
+			if snapshot.Done() {
 				continue
 			}
-			if snapshotRequest.SnapshotLabel != "" {
-				// already performed this request since SnapshotLabel is set
+			glog.V(1).Infof("Leader initiating snapshot for request: %+v", snapshot)
+			(*snapshot).Error = l.dao.LocalSnapshot(snapshot.ServiceID, &(*snapshot).Label)
+			if err := zk.UpdateSnapshot(snapshot, snapshot.ServiceID); err != nil {
+				glog.Errorf("Leader unable to update snapshot request: %+v, err: %s", snapshot, err)
 				continue
 			}
-			if snapshotRequest.SnapshotError != "" {
-				// already performed this request since SnapshotError is set
-				continue
-			}
-
-			glog.V(0).Infof("Leader starting snapshot for request: %+v", snapshotRequest)
-
-			// TODO: perform snapshot request here
-			snapLabel := ""
-			if err := cpDao.LocalSnapshot(snapshotRequest.ServiceId, &snapLabel); err != nil {
-				glog.V(0).Infof("watchSnapshotRequests: snaps.ExecuteSnapshot err=%s", err)
-				snapshotRequest.SnapshotError = err.Error()
-				snapshotRequest.SnapshotLabel = snapLabel
-				zzk.UpdateSnapshotRequest(conn, &snapshotRequest)
-				continue
-			}
-
-			snapshotRequest.SnapshotLabel = snapLabel
-			if err := zzk.UpdateSnapshotRequest(conn, &snapshotRequest); err != nil {
-				glog.Errorf("Leader unable to update snapshot request: %+v  error: %s", snapshotRequest, err)
-				snapshotRequest.SnapshotError = err.Error()
-				zzk.UpdateSnapshotRequest(conn, &snapshotRequest)
-				continue
-			}
-
-			glog.V(0).Infof("Leader finished snapshot for request: %+v", snapshotRequest)
-		}
-		select {
-		case evt := <-zkEvent:
-			glog.V(2).Infof("Leader snapshot request watch event: %+v", evt)
+			glog.V(1).Infof("Leader updated snapshot request: %+v", snapshot)
 		}
 	}
 }

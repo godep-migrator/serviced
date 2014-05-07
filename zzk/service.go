@@ -19,7 +19,7 @@ func NewServiceMessage(id string, service *service.Service) Message {
 // LoadServiceW returns a watch event that monitors a particular service
 func (z *Zookeeper) LoadServiceW(service *service.Service, id string) (<-chan client.Event, error) {
 	msg := NewServiceMessage(id, service)
-	return z.getW(&msg)
+	return z.getW(&msg, getW)
 }
 
 // LoadService loads a particular service
