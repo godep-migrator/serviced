@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/zenoss/cli"
+	"github.com/zenoss/serviced"
 	"github.com/zenoss/serviced/cli/api"
 )
 
@@ -73,10 +74,12 @@ func (c *ServicedCli) initService() {
 			}, {
 				Name:         "proxy",
 				Usage:        "Starts a server proxy for a container",
-				Description:  "serviced service proxy SERVICEID COMMAND",
+				Description:  "serviced service proxy SERVICEID HOSTID INSTANCEID COMMAND",
 				BashComplete: c.printServicesFirst,
 				Before:       c.cmdServiceProxy,
 				Flags: []cli.Flag{
+					cli.StringFlag{"forwarder-binary", "/usr/local/serviced/resources/logstash/logstash-forwarder", "path to the logstash-forwarder binary"},
+					cli.StringFlag{"forwarder-config", "/etc/logstash-forwarder.conf", "path to the logstash-forwarder config file"},
 					cli.IntFlag{"muxport", 22250, "multiplexing port to use"},
 					cli.BoolTFlag{"mux", "enable port multiplexing"},
 					cli.BoolTFlag{"tls", "enable tls"},
@@ -99,11 +102,10 @@ func (c *ServicedCli) initService() {
 			}, {
 				Name:         "run",
 				Usage:        "Runs a service command in a service instance",
-				Description:  "serviced service run SERVICEID [COMMAND]",
+				Description:  "serviced service run SERVICEID COMMAND [ARGS]",
 				BashComplete: c.printServiceRun,
 				Before:       c.cmdServiceRun,
 				Flags: []cli.Flag{
-					cli.StringFlag{"saveas, s", "", "saves the service instance with the given name"},
 					cli.BoolFlag{"interactive, i", "runs the service instance as a tty"},
 				},
 			}, {
@@ -434,14 +436,15 @@ func (c *ServicedCli) cmdServiceStop(ctx *cli.Context) {
 	}
 }
 
-// serviced service proxy SERVICED COMMAND
+// serviced service proxy SERVICE_ID COMMAND
 func (c *ServicedCli) cmdServiceProxy(ctx *cli.Context) error {
-	if len(ctx.Args()) < 2 {
+	if len(ctx.Args()) < 4 {
 		fmt.Printf("Incorrect Usage.\n\n")
 		return nil
 	}
 
-	api.LoadProxyOptions(api.ProxyOptions{
+	args := ctx.Args()
+	options := api.ControllerOptions{
 		MuxPort:          ctx.GlobalInt("muxport"),
 		Mux:              ctx.GlobalBool("mux"),
 		TLS:              ctx.GlobalBool("tls"),
@@ -450,14 +453,13 @@ func (c *ServicedCli) cmdServiceProxy(ctx *cli.Context) error {
 		ServicedEndpoint: ctx.GlobalString("endpoint"),
 		Autorestart:      ctx.GlobalBool("autorestart"),
 		Logstash:         ctx.GlobalBool("logstash"),
-	})
-
-	cfg := api.ProxyConfig{
-		ServiceID: ctx.Args().First(),
-		Command:   ctx.Args().Tail(),
+		LogstashBinary:   ctx.GlobalString("forwarder-binary"),
+		LogstashConfig:   ctx.GlobalString("forwarder-config"),
+		Command:          args[3:],
+		ServiceID:        args[0],
 	}
 
-	if err := c.driver.StartProxy(cfg); err != nil {
+	if err := c.driver.StartProxy(options); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
 
@@ -529,7 +531,7 @@ func (c *ServicedCli) cmdServiceRun(ctx *cli.Context) error {
 	if len(args) > 2 {
 		argv = args[2:]
 	}
-	saveAs = ctx.GlobalString("saveas")
+	saveAs = serviced.GetLabel(serviceID)
 	isTTY = ctx.GlobalBool("interactive")
 
 	config := api.ShellConfig{
