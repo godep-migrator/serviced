@@ -4,43 +4,47 @@ import (
 	"path"
 	"time"
 
+	"github.com/zenoss/serviced/coordinator/client"
 	"github.com/zenoss/serviced/domain/servicestate"
 )
 
-// NewServiceStateMessage initializes a new service state message
-func NewServiceStateMessage(id string, serviceID string, state *servicestate.ServiceState) Message {
-	msg := NewMessage(id, state)
-	msg.home = path.Join(zkService, serviceID)
-	return msg
+func newServiceStateMessage(state *servicestate.ServiceState, serviceID, ssID string) *message {
+	return newMessage(state, zkService, serviceID, ssID)
 }
 
 // LoadServiceState loads a service state given its ID and serviceID
-func (z *Zookeeper) LoadServiceState(state *servicestate.ServiceState, id string, serviceID string) error {
-	msg := NewServiceStateMessage(id, serviceID, state)
-	return z.call(&msg, get)
+func (z *Zookeeper) LoadServiceState(state *servicestate.ServiceState, serviceID, ssID string) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadServiceState(conn, state, serviceID, ssID)
+	})
 }
 
-// LoadServiceStatesByService loads service states by the service ID
-func (z *Zookeeper) LoadServiceStatesByService(states *[]*servicestate.ServiceState, serviceIDs ...string) error {
-	for _, serviceID := range serviceIDs {
-		// Get the child nodes of the service
-		var ssids []string
-		serviceMessage := Message{
-			home:    zkService,
-			id:      serviceID,
-			Payload: &ssids,
-		}
-		if err := z.call(&serviceMessage, children); err != nil {
-			return err
-		}
+// LoadServiceState loads a service state given its ID and serviceID
+func LoadServiceState(conn client.Connection, state *servicestate.ServiceState, serviceID, ssID string) error {
+	msg := newServiceStateMessage(state, serviceID, ssID)
+	return get(conn, msg)
+}
 
-		// Get the service states for each child of the service
-		for _, ssid := range ssids {
+// LoadServiceStates loads service states by the service ID
+func (z *Zookeeper) LoadServiceStates(states *[]*servicestate.ServiceState, serviceIDs ...string) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadServiceStates(conn, states, serviceIDs...)
+	})
+}
+
+func LoadServiceStates(conn client.Connection, states *[]*servicestate.ServiceState, serviceIDs ...string) error {
+	for _, serviceID := range serviceIDs {
+		p := path.Join(zkService, serviceID)
+		err := children(conn, p, func(ssID string) error {
 			var state servicestate.ServiceState
-			if err := z.LoadServiceState(&state, ssid, serviceID); err != nil {
+			if err := LoadServiceState(conn, &state, serviceID, ssID); err != nil {
 				return err
 			}
 			*states = append(*states, &state)
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -48,32 +52,61 @@ func (z *Zookeeper) LoadServiceStatesByService(states *[]*servicestate.ServiceSt
 
 // AddServiceState creates a new service state
 func (z *Zookeeper) AddServiceState(state *servicestate.ServiceState) error {
-	msg := NewServiceStateMessage(state.Id, state.ServiceId, state)
-	if err := z.call(&msg, add); err != nil {
+	return z.call(func(conn client.Connection) error {
+		return AddServiceState(conn, state)
+	})
+}
+
+// AddServiceState creates a new service state
+func AddServiceState(conn client.Connection, state *servicestate.ServiceState) error {
+	msg := newServiceStateMessage(state, state.ServiceId, state.Id)
+	if err := add(conn, msg); err != nil {
 		return err
 	}
-	return z.AddHostServiceState(NewHostServiceState(state))
+	hss := NewHostServiceState(state)
+	return AddHostServiceState(conn, hss)
 }
 
 // UpdateServiceState updates an existing service state
 func (z *Zookeeper) UpdateServiceState(state *servicestate.ServiceState) error {
-	msg := NewServiceStateMessage(state.Id, state.ServiceId, state)
-	return z.call(&msg, update)
+	return z.call(func(conn client.Connection) error {
+		return UpdateServiceState(conn, state)
+	})
+}
+
+// UpdateServiceState updates an existing service state
+func UpdateServiceState(conn client.Connection, state *servicestate.ServiceState) error {
+	msg := newServiceStateMessage(state, state.ServiceId, state.Id)
+	return update(conn, msg)
 }
 
 // LoadAndUpdateServiceState loads a service state and mutates it accordingly
-func (z *Zookeeper) LoadAndUpdateServiceState(id string, serviceID string, mutate func(*servicestate.ServiceState)) error {
+func (z *Zookeeper) LoadAndUpdateServiceState(serviceID, ssID string, mutate func(*servicestate.ServiceState)) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadAndUpdateServiceState(conn, serviceID, ssID, mutate)
+	})
+}
+
+// LoadAndUpdateServiceState loads a service state and mutates it accordingly
+func LoadAndUpdateServiceState(conn client.Connection, serviceID, ssID string, mutate func(*servicestate.ServiceState)) error {
 	var state servicestate.ServiceState
-	if err := z.LoadServiceState(&state, id, serviceID); err != nil {
+	if err := LoadServiceState(conn, &state, serviceID, ssID); err != nil {
 		return err
 	}
 	mutate(&state)
-	return z.UpdateServiceState(&state)
+	return UpdateServiceState(conn, &state)
 }
 
 // ResetServiceState resets a service state
-func (z *Zookeeper) ResetServiceState(id string, serviceID string) error {
-	return z.LoadAndUpdateServiceState(id, serviceID, func(state *servicestate.ServiceState) {
+func (z *Zookeeper) ResetServiceState(serviceID, ssID string) error {
+	return z.call(func(conn client.Connection) error {
+		return ResetServiceState(conn, serviceID, ssID)
+	})
+}
+
+// ResetServiceState resets a service state
+func ResetServiceState(conn client.Connection, serviceID, ssID string) error {
+	return LoadAndUpdateServiceState(conn, serviceID, ssID, func(state *servicestate.ServiceState) {
 		(*state).Terminated = time.Now()
 	})
 }

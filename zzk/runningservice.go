@@ -1,6 +1,9 @@
 package zzk
 
 import (
+	"path"
+
+	"github.com/zenoss/serviced/coordinator/client"
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/domain/service"
 	"github.com/zenoss/serviced/domain/servicestate"
@@ -31,85 +34,107 @@ func NewRunningService(service *service.Service, state *servicestate.ServiceStat
 }
 
 // LoadRunningService loads a running service node
-func (z *Zookeeper) LoadRunningService(running *dao.RunningService, serviceStateID string, serviceID string) error {
+func (z *Zookeeper) LoadRunningService(rs *dao.RunningService, serviceID, ssID string) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadRunningService(conn, rs, serviceID, ssID)
+	})
+}
+
+func LoadRunningService(conn client.Connection, rs *dao.RunningService, serviceID string, ssID string) error {
 	var service service.Service
-	if err := z.LoadService(&service, serviceID); err != nil {
+	if err := LoadService(conn, &service, serviceID); err != nil {
 		return err
 	}
 
 	var state servicestate.ServiceState
-	if err := z.LoadServiceState(&state, serviceStateID, serviceID); err != nil {
+	if err := LoadServiceState(conn, &state, serviceID, ssID); err != nil {
 		return err
 	}
 
-	*running = *NewRunningService(&service, &state)
+	*rs = *NewRunningService(&service, &state)
 	return nil
 }
 
 // LoadRunningServicesByHost gets all of the running services via a hostID lookup
-func (z *Zookeeper) LoadRunningServicesByHost(running *[]*dao.RunningService, hostIDs ...string) error {
+func (z *Zookeeper) LoadRunningServicesByHost(rss *[]*dao.RunningService, hostIDs ...string) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadRunningServicesByHost(conn, rss, hostIDs...)
+	})
+}
+
+// LoadRunningServicesByHost gets all of the running services via a hostID lookup
+func LoadRunningServicesByHost(conn client.Connection, rss *[]*dao.RunningService, hostIDs ...string) error {
 	for _, hostID := range hostIDs {
-		var states []string
-		hostMessage := Message{
-			home:    zkHost,
-			id:      hostID,
-			Payload: &states,
-		}
-		if err := z.call(&hostMessage, children); err != nil {
-			return err
-		}
-		for _, ssid := range states {
+		p := path.Join(zkHost, hostID)
+		err := children(conn, p, func(ssID string) error {
 			var hss HostServiceState
-			if err := z.LoadHostServiceState(&hss, ssid, hostID); err != nil {
+			if err := LoadHostServiceState(conn, &hss, hostID, ssID); err != nil {
 				return err
 			}
 
 			var service service.Service
-			if err := z.LoadService(&service, hss.ServiceID); err != nil {
+			if err := LoadService(conn, &service, hss.ServiceID); err != nil {
 				return err
 			}
 
 			var state servicestate.ServiceState
-			if err := z.LoadServiceState(&state, hss.ServiceStateID, hss.ServiceID); err != nil {
+			if err := LoadServiceState(conn, &state, hss.ServiceID, hss.ServiceStateID); err != nil {
 				return err
 			}
 
-			*running = append(*running, NewRunningService(&service, &state))
+			*rss = append(*rss, NewRunningService(&service, &state))
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 	}
-
 	return nil
 }
 
 // LoadRunningServicesByService gets all of the running services via a serviceID lookup
-func (z *Zookeeper) LoadRunningServicesByService(running *[]*dao.RunningService, serviceIDs ...string) error {
+func (z *Zookeeper) LoadRunningServicesByService(rss *[]*dao.RunningService, serviceIDs ...string) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadRunningServicesByService(conn, rss, serviceIDs...)
+	})
+}
+
+// LoadRunningServicesByService gets all of the running services via a serviceID lookup
+func LoadRunningServicesByService(conn client.Connection, rss *[]*dao.RunningService, serviceIDs ...string) error {
 	for _, serviceID := range serviceIDs {
 		var service service.Service
-		if err := z.LoadService(&service, serviceID); err != nil {
+		if err := LoadService(conn, &service, serviceID); err != nil {
 			return err
 		}
 
 		var states []*servicestate.ServiceState
-		if err := z.LoadServiceStatesByService(&states, serviceID); err != nil {
+		if err := LoadServiceStates(conn, &states, serviceID); err != nil {
 			return err
 		}
 
-		for _, s := range states {
-			*running = append(*running, NewRunningService(&service, s))
+		for _, state := range states {
+			*rss = append(*rss, NewRunningService(&service, state))
 		}
 	}
 	return nil
 }
 
 // LoadRunningServices gets all of the running services
-func (z *Zookeeper) LoadRunningServices(running *[]*dao.RunningService) error {
+func (z *Zookeeper) LoadRunningServices(rss *[]*dao.RunningService) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadRunningServices(conn, rss)
+	})
+}
+
+// LoadRunningServices gets all of the running services
+func LoadRunningServices(conn client.Connection, rss *[]*dao.RunningService) error {
 	var serviceIDs []string
-	msg := Message{
-		home:    zkService,
-		Payload: &serviceIDs,
-	}
-	if err := z.call(&msg, children); err != nil {
+	err := children(conn, zkService, func(serviceID string) error {
+		serviceIDs = append(serviceIDs, serviceID)
+		return nil
+	})
+	if err != nil {
 		return err
 	}
-	return z.LoadRunningServicesByService(running, serviceIDs...)
+	return LoadRunningServicesByService(conn, rss, serviceIDs...)
 }

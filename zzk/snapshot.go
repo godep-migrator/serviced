@@ -1,6 +1,7 @@
 package zzk
 
 import (
+	"github.com/zenoss/glog"
 	"github.com/zenoss/serviced/coordinator/client"
 )
 
@@ -21,87 +22,109 @@ func (s Snapshot) Done() bool {
 	return s.Label != "" || s.Error != nil
 }
 
-// NewSnapshotMessage builds a new snapshot message
-func NewSnapshotMessage(serviceID string, snapshot *Snapshot) Message {
-	msg := NewMessage(serviceID, snapshot)
-	msg.home = zkSnapshot
-	return msg
+func newSnapshotMessage(snapshot *Snapshot, serviceID string) *message {
+	return newMessage(snapshot, zkSnapshot, serviceID)
 }
 
 // LoadSnapshotsW returns an event channel that indicates when there is a change to the snapshots node
 func (z *Zookeeper) LoadSnapshotsW(snapshots *[]*Snapshot) (<-chan client.Event, error) {
-	var reqids []string
-	msg := Message{
-		home:    zkSnapshot,
-		Payload: &reqids,
-	}
+	return z.getW(func(conn client.Connection) (<-chan client.Event, error) {
+		return LoadSnapshotsW(conn, snapshots)
+	})
+}
 
-	event, err := z.getW(&msg, childrenW)
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		<-event
-		*snapshots = make([]*Snapshot, len(reqids))
-		for i, rid := range reqids {
-			var snapshot Snapshot
-			if err := z.LoadSnapshot(&snapshot, rid); err != nil {
-				return
-			}
-			*(*snapshots)[i] = snapshot
+// LoadSnapshotsW returns an event channel that indicates when there is a change to the snapshots node
+func LoadSnapshotsW(conn client.Connection, snapshots *[]*Snapshot) (<-chan client.Event, error) {
+	return childrenW(conn, zkSnapshot, func(serviceID string) {
+		var snapshot Snapshot
+		if err := LoadSnapshot(conn, &snapshot, serviceID); err != nil {
+			glog.Errorf("error loading snapshot: %s", err)
 		}
-	}()
-	return event, err
+		*snapshots = append(*snapshots, &snapshot)
+	})
 }
 
 // LoadSnapshotW returns an event channel that indicates when there is a change to a specific snapshot
-func (z *Zookeeper) LoadSnapshotW(snapshot *Snapshot, id string) (<-chan client.Event, error) {
-	msg := NewSnapshotMessage(id, snapshot)
-	return z.getW(&msg, getW)
+func (z *Zookeeper) LoadSnapshotW(snapshot *Snapshot, serviceID string) (<-chan client.Event, error) {
+	return z.getW(func(conn client.Connection) (<-chan client.Event, error) {
+		return LoadSnapshotW(conn, snapshot, serviceID)
+	})
+}
+
+// LoadSnapshotW returns an event channel that indicates when there is a change to a specific snapshot
+func LoadSnapshotW(conn client.Connection, snapshot *Snapshot, serviceID string) (<-chan client.Event, error) {
+	msg := newSnapshotMessage(snapshot, serviceID)
+	return getW(conn, msg)
 }
 
 // LoadSnapshot loads a particular snaphot
-func (z *Zookeeper) LoadSnapshot(snapshot *Snapshot, id string) error {
-	msg := NewSnapshotMessage(id, snapshot)
-	return z.call(&msg, get)
+func (z *Zookeeper) LoadSnapshot(snapshot *Snapshot, serviceID string) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadSnapshot(conn, snapshot, serviceID)
+	})
+}
+
+// LoadSnapshot loads a particular snaphot
+func LoadSnapshot(conn client.Connection, snapshot *Snapshot, serviceID string) error {
+	msg := newSnapshotMessage(snapshot, serviceID)
+	return get(conn, msg)
 }
 
 // LoadSnapshots loads all of the snapshots
 func (z *Zookeeper) LoadSnapshots(snapshots *[]*Snapshot) error {
-	var reqids []string
-	msg := Message{
-		home:    zkSnapshot,
-		Payload: &reqids,
-	}
-	if err := z.call(&msg, children); err != nil {
-		return err
-	}
+	return z.call(func(conn client.Connection) error {
+		return LoadSnapshots(conn, snapshots)
+	})
+}
 
-	*snapshots = make([]*Snapshot, len(reqids))
-	for i, id := range reqids {
+// LoadSnapshots loads all of the snapshots
+func LoadSnapshots(conn client.Connection, snapshots *[]*Snapshot) error {
+	err := children(conn, zkSnapshot, func(serviceID string) error {
 		var snapshot Snapshot
-		if err := z.LoadSnapshot(&snapshot, id); err != nil {
+		if err := LoadSnapshot(conn, &snapshot, serviceID); err != nil {
 			return err
 		}
-		*(*snapshots)[i] = snapshot
-	}
-	return nil
+		*snapshots = append(*snapshots, &snapshot)
+		return nil
+	})
+	return err
 }
 
 // AddSnapshot creates a new snapshot request
 func (z *Zookeeper) AddSnapshot(snapshot *Snapshot) error {
-	msg := NewSnapshotMessage(snapshot.ServiceID, snapshot)
-	return z.call(&msg, add)
+	return z.call(func(conn client.Connection) error {
+		return AddSnapshot(conn, snapshot)
+	})
+}
+
+// AddSnapshot creates a new snapshot request
+func AddSnapshot(conn client.Connection, snapshot *Snapshot) error {
+	msg := newSnapshotMessage(snapshot, snapshot.ServiceID)
+	return add(conn, msg)
 }
 
 // UpdateSnapshot updates the existing snapshot request
-func (z *Zookeeper) UpdateSnapshot(snapshot *Snapshot, id string) error {
-	msg := NewSnapshotMessage(id, snapshot)
-	return z.call(&msg, add)
+func (z *Zookeeper) UpdateSnapshot(snapshot *Snapshot) error {
+	return z.call(func(conn client.Connection) error {
+		return UpdateSnapshot(conn, snapshot)
+	})
+}
+
+// UpdateSnapshot updates the existing snapshot request
+func UpdateSnapshot(conn client.Connection, snapshot *Snapshot) error {
+	msg := newSnapshotMessage(snapshot, snapshot.ServiceID)
+	return update(conn, msg)
 }
 
 // RemoveSnapshot removes an existing snapshot request
-func (z *Zookeeper) RemoveSnapshot(id string) error {
-	msg := NewSnapshotMessage(id, nil)
-	return z.call(&msg, remove)
+func (z *Zookeeper) RemoveSnapshot(serviceID string) error {
+	return z.call(func(conn client.Connection) error {
+		return RemoveSnapshot(conn, serviceID)
+	})
+}
+
+// RemoveSnapshot removes an existing snapshot request
+func RemoveSnapshot(conn client.Connection, serviceID string) error {
+	msg := newSnapshotMessage(nil, serviceID)
+	return remove(conn, msg)
 }

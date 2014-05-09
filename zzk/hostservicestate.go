@@ -1,8 +1,6 @@
 package zzk
 
 import (
-	"path"
-
 	"github.com/zenoss/serviced/coordinator/client"
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/domain/servicestate"
@@ -26,50 +24,89 @@ func NewHostServiceState(state *servicestate.ServiceState) *HostServiceState {
 	}
 }
 
-// NewHostServiceStateMessage initializes a new message for HostServiceState nodes
-func NewHostServiceStateMessage(serviceStateID string, hostID string, hss *HostServiceState) Message {
-	msg := NewMessage(serviceStateID, hss)
-	msg.home = path.Join(zkHost, hostID)
-	return msg
+func newHostServiceStateMessage(hss *HostServiceState, hostID, ssID string) *message {
+	return newMessage(hss, zkHost, hostID, ssID)
 }
 
 // LoadHostServiceStateW returns a watch event for a HostServiceState node
-func (z *Zookeeper) LoadHostServiceStateW(hss *HostServiceState, serviceStateID string, hostID string) (<-chan client.Event, error) {
-	msg := NewHostServiceStateMessage(serviceStateID, hostID, hss)
-	return z.getW(&msg, getW)
+func (z *Zookeeper) LoadHostServiceStateW(hss *HostServiceState, hostID, ssID string) (<-chan client.Event, error) {
+	return z.getW(func(conn client.Connection) (<-chan client.Event, error) {
+		return LoadHostServiceStateW(conn, hss, hostID, ssID)
+	})
+}
+
+// LoadHostServiceStateW returns a watch event for a HostServiceState node
+func LoadHostServiceStateW(conn client.Connection, hss *HostServiceState, hostID, ssID string) (<-chan client.Event, error) {
+	msg := newHostServiceStateMessage(hss, hostID, ssID)
+	return getW(conn, msg)
 }
 
 // LoadHostServiceState loads a particular HostServiceState
-func (z *Zookeeper) LoadHostServiceState(hss *HostServiceState, serviceStateID string, hostID string) error {
-	msg := NewHostServiceStateMessage(serviceStateID, hostID, hss)
-	return z.call(&msg, get)
-}
-
-// UpdateHostServiceState updates an existing host service state
-func (z *Zookeeper) UpdateHostServiceState(hss *HostServiceState) error {
-	msg := NewHostServiceStateMessage(hss.ServiceStateID, hss.HostID, hss)
-	return z.call(&msg, update)
-}
-
-// LoadAndUpdateHSS mutates a HostServiceState object with provided function
-func (z *Zookeeper) LoadAndUpdateHSS(serviceStateID string, hostID string, mutate func(*HostServiceState)) error {
-	var hss HostServiceState
-	if err := z.LoadHostServiceState(&hss, serviceStateID, hostID); err != nil {
-		return err
-	}
-	mutate(&hss)
-	return z.UpdateHostServiceState(&hss)
-}
-
-// TerminateHostService terminates a ServiceState on a host
-func (z *Zookeeper) TerminateHostService(serviceStateID string, hostID string) error {
-	return z.LoadAndUpdateHSS(serviceStateID, hostID, func(hss *HostServiceState) {
-		(*hss).DesiredState = dao.SVC_STOP
+func (z *Zookeeper) LoadHostServiceState(hss *HostServiceState, ssID, hostID string) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadHostServiceState(conn, hss, ssID, hostID)
 	})
+}
+
+// LoadHostServiceState loads a particular HostServiceState
+func LoadHostServiceState(conn client.Connection, hss *HostServiceState, ssID, hostID string) error {
+	msg := newHostServiceStateMessage(hss, hostID, ssID)
+	return get(conn, msg)
 }
 
 // AddHostServiceState creates a new HostServiceState node
 func (z *Zookeeper) AddHostServiceState(hss *HostServiceState) error {
-	msg := NewHostServiceStateMessage(hss.ServiceStateID, hss.HostID, hss)
-	return z.call(&msg, add)
+	return z.call(func(conn client.Connection) error {
+		return AddHostServiceState(conn, hss)
+	})
+}
+
+// AddHostServiceState creates a new HostServiceState node
+func AddHostServiceState(conn client.Connection, hss *HostServiceState) error {
+	msg := newHostServiceStateMessage(hss, hss.HostID, hss.ServiceStateID)
+	return add(conn, msg)
+}
+
+// UpdateHostServiceState updates an existing host service state
+func (z *Zookeeper) UpdateHostServiceState(hss *HostServiceState) error {
+	return z.call(func(conn client.Connection) error {
+		return UpdateHostServiceState(conn, hss)
+	})
+}
+
+// UpdateHostServiceState updates an existing host service state
+func UpdateHostServiceState(conn client.Connection, hss *HostServiceState) error {
+	msg := newHostServiceStateMessage(hss, hss.HostID, hss.ServiceStateID)
+	return update(conn, msg)
+}
+
+// LoadAndUpdateHostServiceState mutates a HostServiceState object with provided function
+func (z *Zookeeper) LoadAndUpdateHostServiceState(hostID, ssID string, mutate func(*HostServiceState)) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadAndUpdateHostServiceState(conn, hostID, ssID, mutate)
+	})
+}
+
+// LoadAndUpdateHSS mutates a HostServiceState object with provided function
+func LoadAndUpdateHostServiceState(conn client.Connection, hostID, ssID string, mutate func(*HostServiceState)) error {
+	var hss HostServiceState
+	if err := LoadHostServiceState(conn, &hss, hostID, ssID); err != nil {
+		return err
+	}
+	mutate(&hss)
+	return UpdateHostServiceState(conn, &hss)
+}
+
+// TerminateHostService terminates a ServiceState on a host
+func (z *Zookeeper) TerminateHostService(hostID, ssID string) error {
+	return z.call(func(conn client.Connection) error {
+		return TerminateHostService(conn, hostID, ssID)
+	})
+}
+
+// TerminateHostService terminates a ServiceState on a host
+func TerminateHostService(conn client.Connection, hostID, ssID string) error {
+	return LoadAndUpdateHostServiceState(conn, hostID, ssID, func(hss *HostServiceState) {
+		(*hss).DesiredState = dao.SVC_STOP
+	})
 }
