@@ -292,6 +292,11 @@ func (se *ServiceEndpoint) SetAssignment(aa *AddressAssignment) error {
 	return nil
 }
 
+func (se *ServiceEndpoint) RemoveAssignment() error {
+	se.AddressAssignment = AddressAssignment{}
+	return nil
+}
+
 //GetAssignment Returns nil if no assignment set
 func (se *ServiceEndpoint) GetAssignment() *AddressAssignment {
 	if se.AddressAssignment.ID == "" {
