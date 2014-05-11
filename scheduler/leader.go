@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"fmt"
-	"path"
 	"time"
 
 	"github.com/zenoss/glog"
@@ -64,141 +63,126 @@ func snapShotName(volumeName string) string {
 }
 
 func (l *leader) watchSnapshots() {
-	glog.V(3).Info("waiting for snapshot request")
-	defer glog.V(3).Info("finished waiting for snapshots")
+	glog.V(0).Info("Leader waiting for snapshot requests")
+	defer glog.V(0).Info("Leader finished waiting for snapshots")
 
-	zk := zzk.New(l.conn)
+	conn := l.conn
+	cpDao := l.dao
 
 	// watch for snapshots
 	for {
 		var snapshots []*zzk.Snapshot
-		evt, err := zk.LoadSnapshotsW(&snapshots)
+		evt, err := zzk.LoadSnapshotsW(conn, &snapshots)
 		if err != nil {
-			glog.Errorf("Could not watch for snapshot requests: %s", err)
+			glog.Errorf("Leader unable to watch snapshots: %s", err)
 			return
 		}
-		<-evt
 		for _, snapshot := range snapshots {
 			if snapshot.Done() {
 				continue
 			}
-			glog.V(1).Infof("Leader initiating snapshot for request: %+v", snapshot)
-			(*snapshot).Error = l.dao.LocalSnapshot(snapshot.ServiceID, &(*snapshot).Label)
-			if err := zk.UpdateSnapshot(snapshot, snapshot.ServiceID); err != nil {
-				glog.Errorf("Leader unable to update snapshot request: %+v, err: %s", snapshot, err)
-				continue
+
+			glog.V(1).Infof("Leader taking snapshot for request: %v", snapshot)
+			var label string
+			err := cpDao.LocalSnapshot(snapshot.ServiceID, &label)
+			if err != nil {
+				glog.V(1).Infof("Leader unable to take snapshot: %s", err)
 			}
-			glog.V(1).Infof("Leader updated snapshot request: %+v", snapshot)
+			(*snapshot).Label = label
+			(*snapshot).Error = err
+			zzk.UpdateSnapshot(conn, snapshot)
+			glog.V(1).Infof("Leader finished taking snapshot for request: %+v", snapshot)
 		}
+		<-evt
 	}
 }
 
 func (l *leader) watchServices() {
 	conn := l.conn
-	processing := make(map[string]chan int)
-	sDone := make(chan string)
+	processing := make(map[string]interface{})
+	done := make(chan string)
 
-	// When this function exits, ensure that any started goroutines get
-	// a signal to shutdown
+	// If this function exits shut down all subroutines
+	shutdown := make(chan interface{})
 	defer func() {
-		glog.V(0).Info("Leader shutting down child goroutines")
-		for key, shutdown := range processing {
-			glog.V(1).Info("Sending shutdown signal for ", key)
-			shutdown <- 1
-		}
+		glog.V(0).Infof("Leader shutting down children")
+		close(shutdown)
 	}()
 
-	conn.CreateDir(zzk.SERVICE_PATH)
+	glog.V(0).Infof("Leader waiting for service changes")
+	defer glog.V(1).Infof("Leader done waiting for service changes")
 	for {
-		glog.V(1).Info("Leader watching for changes to ", zzk.SERVICE_PATH)
-		serviceIds, zkEvent, err := conn.ChildrenW(zzk.SERVICE_PATH)
+		// clean up any finished services
+		select {
+		case serviceID := <-done:
+			glog.V(2).Infof("Leader cleaning up service: %s", serviceID)
+			delete(processing, serviceID)
+		}
+
+		var services []*service.Service
+		evt, err := zzk.LoadServicesW(conn, &services)
 		if err != nil {
-			glog.Errorf("Leader unable to find any services: %s", err)
+			glog.Errorf("Leader could not watch services: %s", err)
 			return
 		}
-		for _, serviceID := range serviceIds {
-			if processing[serviceID] == nil {
-				glog.V(2).Info("Leader starting goroutine to watch ", serviceID)
-				serviceChannel := make(chan int)
-				processing[serviceID] = serviceChannel
-				go l.watchService(serviceChannel, sDone, serviceID)
+		<-evt
+		for _, s := range services {
+			if _, ok := processing[s.Id]; !ok {
+				processing[s.Id] = nil
+				go l.watchService(shutdown, done, s.Id)
 			}
-		}
-		select {
-		case evt := <-zkEvent:
-			glog.V(1).Info("Leader event: ", evt)
-		case serviceID := <-sDone:
-			glog.V(1).Info("Leading cleaning up for service ", serviceID)
-			delete(processing, serviceID)
 		}
 	}
 }
 
-func (l *leader) watchService(shutdown <-chan int, done chan<- string, serviceID string) {
+func (l *leader) watchService(shutdown <-chan interface{}, done chan<- string, serviceID string) {
 	conn := l.conn
 	defer func() {
-		glog.V(3).Info("Exiting function watchService ", serviceID)
+		glog.V(2).Infof("Leader done watching service %s", serviceID)
 		done <- serviceID
 	}()
+
 	for {
-		var svc service.Service
-		zkEvent, err := zzk.LoadServiceW(conn, serviceID, &svc)
+		// watch for changes on the service
+		var service service.Service
+		svcEvent, err := zzk.LoadServiceW(conn, &service, serviceID)
 		if err != nil {
-			glog.Errorf("Unable to load service %s: %v", serviceID, err)
-			return
-		}
-		_, childEvent, err := conn.ChildrenW(zzk.ServicePath(serviceID))
-
-		glog.V(1).Info("Leader watching for changes to service ", svc.Name)
-
-		switch exists, err := conn.Exists(path.Join("/services", serviceID)); {
-		case err != nil:
-			glog.Errorf("conn.Exists failed (%v)", err)
-			return
-		case exists == false:
-			glog.V(2).Infof("no /service node for: %s", serviceID)
+			glog.Errorf("Leader unable to load service %s: %v", serviceID, err)
 			return
 		}
 
-		// check current state
-		var serviceStates []*servicestate.ServiceState
-		err = zzk.GetServiceStates(l.conn, &serviceStates, serviceID)
+		// watch for changes on the service state; if node not exist return
+		var states []*servicestate.ServiceState
+		stateEvent, err := zzk.LoadServiceStatesW(conn, &states, serviceID)
 		if err != nil {
-			glog.Errorf("Unable to retrieve running service (%s) states: %v", serviceID, err)
+			glog.Errorf("Leader unable to load service states for service %s: %v", serviceID, err)
 			return
 		}
 
-		// Is the service supposed to be running at all?
 		switch {
-		case svc.DesiredState == dao.SVC_STOP:
-			shutdownServiceInstances(l.conn, serviceStates, len(serviceStates))
-		case svc.DesiredState == dao.SVC_RUN:
-			l.updateServiceInstances(&svc, serviceStates)
+		case service.DesiredState == dao.SVC_STOP:
+			shutdownServiceInstances(conn, states, len(states))
+		case service.DesiredState == dao.SVC_RUN:
+			l.updateServiceInstances(&service, states)
 		default:
-			glog.Warningf("Unexpected desired state %d for service %s", svc.DesiredState, svc.Name)
+			glog.Warningf("Unexpected desired state %d for service %s", service.DesiredState, service.Name)
 		}
 
 		select {
-		case evt := <-zkEvent:
-			if evt.Type == coordclient.EventNodeDeleted {
-				glog.V(0).Info("Shutting down due to node delete ", serviceID)
-				shutdownServiceInstances(l.conn, serviceStates, len(serviceStates))
+		case event := <-svcEvent:
+			if event.Type == coordclient.EventNodeDeleted {
+				glog.V(1).Infof("Shutting down due to node delete: %s", serviceID)
+				shutdownServiceInstances(conn, states, len(states))
 				return
 			}
-			glog.V(1).Infof("Service %s received event: %v", svc.Name, evt)
-			continue
-
-		case evt := <-childEvent:
-			glog.V(1).Infof("Service %s received child event: %v", svc.Name, evt)
-			continue
-
+			glog.V(2).Infof("Service %s received event: %v", service.Name, event)
+		case event := <-stateEvent:
+			glog.V(2).Infof("Service %s received child event: %v", service.Name, event)
 		case <-shutdown:
-			glog.V(1).Info("Leader stopping watch on ", svc.Name)
+			glog.V(2).Infof("Leader stopping watch on %s", service.Name)
 			return
-
 		}
 	}
-
 }
 
 func (l *leader) updateServiceInstances(service *service.Service, serviceStates []*servicestate.ServiceState) error {
@@ -240,14 +224,13 @@ func getFreeInstanceIds(conn coordclient.Connection, svc *service.Service, n int
 		ids    []int
 	)
 	// Look up existing instances
-	err := zzk.GetServiceStates(conn, &states, svc.Id)
-	if err != nil {
+	if err := zzk.LoadServiceStates(conn, &states, svc.Id); err != nil {
 		return nil, err
 	}
 	// Populate the used set
-	used := make(map[int]struct{})
+	used := make(map[int]interface{})
 	for _, s := range states {
-		used[s.InstanceId] = struct{}{}
+		used[s.InstanceId] = nil
 	}
 	// Find n unused ids
 	for i := 0; len(ids) < n; i++ {

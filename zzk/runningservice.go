@@ -1,8 +1,6 @@
 package zzk
 
 import (
-	"path"
-
 	"github.com/zenoss/serviced/coordinator/client"
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/domain/service"
@@ -65,8 +63,8 @@ func (z *Zookeeper) LoadRunningServicesByHost(rss *[]*dao.RunningService, hostID
 // LoadRunningServicesByHost gets all of the running services via a hostID lookup
 func LoadRunningServicesByHost(conn client.Connection, rss *[]*dao.RunningService, hostIDs ...string) error {
 	for _, hostID := range hostIDs {
-		p := path.Join(zkHost, hostID)
-		err := children(conn, p, func(ssID string) error {
+		msg := newHostServiceStateMessage(nil, hostID, "")
+		err := children(conn, msg.path, func(ssID string) error {
 			var hss HostServiceState
 			if err := LoadHostServiceState(conn, &hss, hostID, ssID); err != nil {
 				return err

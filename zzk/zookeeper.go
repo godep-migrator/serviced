@@ -63,41 +63,18 @@ func getW(conn client.Connection, msg *message) (<-chan client.Event, error) {
 	return event, nil
 }
 
-func childrenW(conn client.Connection, path string, f func(string)) (<-chan client.Event, error) {
-	nodes, event, err := conn.ChildrenW(path)
+func childrenW(conn client.Connection, path string) (<-chan client.Event, error) {
+	// Make the path if it doesn't exist
+	if err := mkdir(conn, path); err != nil {
+		return nil, err
+	}
+	// Get the event channel
+	_, event, err := conn.ChildrenW(path)
 	if err != nil {
 		glog.Errorf("Unable to retrieve child watch at %s: %s", path, err)
 		return nil, err
 	}
-
-	evt := make(chan client.Event)
-
-	go func() {
-		e := <-event
-		for _, node := range nodes {
-			f(node)
-		}
-		evt <- e
-		close(evt)
-	}()
-
-	return evt, nil
-}
-
-func children(conn client.Connection, path string, f func(string) error) error {
-	nodes, err := conn.Children(path)
-	if err != nil {
-		glog.Errorf("Unable to retrieve children at %s: %s", path, err)
-		return err
-	}
-
-	for _, node := range nodes {
-		if err := f(node); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return event, err
 }
 
 func get(conn client.Connection, msg *message) error {
@@ -108,20 +85,30 @@ func get(conn client.Connection, msg *message) error {
 	return nil
 }
 
-func mkdir(conn client.Connection, dirpath string) error {
-	var dir func(string) error
-	dir = func(p string) error {
-		if exists, err := conn.Exists(p); err != nil && err != client.ErrNoNode {
-			glog.Errorf("Error checking path %s: %s", p, err)
-			return err
-		} else if exists {
-			return nil
-		} else if dir(path.Dir(p)); err != nil {
+func children(conn client.Connection, path string, f func(string) error) error {
+	nodes, err := conn.Children(path)
+	if err != nil {
+		glog.Errorf("Unable to retrieve children at %s: %s", path, err)
+		return err
+	}
+	for _, node := range nodes {
+		if err := f(node); err != nil {
 			return err
 		}
-		return conn.CreateDir(p)
 	}
-	return dir(dirpath)
+	return nil
+}
+
+func mkdir(conn client.Connection, dpath string) error {
+	if exists, err := conn.Exists(dpath); err != nil && err != client.ErrNoNode {
+		glog.Errorf("Error checking path %s: %s", dpath, err)
+		return err
+	} else if exists {
+		return nil
+	} else if mkdir(conn, path.Dir(dpath)); err != nil {
+		return err
+	}
+	return conn.CreateDir(dpath)
 }
 
 func add(conn client.Connection, msg *message) error {
@@ -140,8 +127,7 @@ func add(conn client.Connection, msg *message) error {
 
 func update(conn client.Connection, msg *message) error {
 	// if node does not exist, create
-	exists, err := conn.Exists(msg.path)
-	if err != nil && err != client.ErrNoNode {
+	if exists, err := conn.Exists(msg.path); err != nil && err != client.ErrNoNode {
 		return err
 	} else if !exists {
 		return add(conn, msg)
@@ -156,8 +142,15 @@ func update(conn client.Connection, msg *message) error {
 }
 
 func remove(conn client.Connection, msg *message) error {
+	// if the node does not exist, error
+	if exists, err := conn.Exists(msg.path); err != nil && err != client.ErrNoNode {
+		glog.Errorf("Unable to get node for deletion %s: %s", msg.path, err)
+		return err
+	} else if !exists {
+		return nil
+	}
 	if err := conn.Delete(msg.path); err != nil {
-		glog.Errorf("Unable to delete message at %s: %+v", msg.path, err)
+		glog.Errorf("Unable to delete node %s: %s", msg.path, err)
 		return err
 	}
 	return nil

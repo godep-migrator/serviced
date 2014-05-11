@@ -41,17 +41,53 @@ func LoadHostServiceStateW(conn client.Connection, hss *HostServiceState, hostID
 	return getW(conn, msg)
 }
 
+// LoadHostServiceStatesW returns a watch for a HostServiceState host node
+func (z *Zookeeper) LoadHostServiceStatesW(states *[]*HostServiceState, hostID string) (<-chan client.Event, error) {
+	return z.getW(func(conn client.Connection) (<-chan client.Event, error) {
+		return LoadHostServiceStatesW(conn, states, hostID)
+	})
+}
+
+// LoadHostServiceStatesW returns a watch for a HostServiceState host node
+func LoadHostServiceStatesW(conn client.Connection, states *[]*HostServiceState, hostID string) (<-chan client.Event, error) {
+	if err := LoadHostServiceStates(conn, states, hostID); err != nil {
+		return nil, err
+	}
+	msg := newHostServiceStateMessage(nil, hostID, "")
+	return childrenW(conn, msg.path)
+}
+
 // LoadHostServiceState loads a particular HostServiceState
-func (z *Zookeeper) LoadHostServiceState(hss *HostServiceState, ssID, hostID string) error {
+func (z *Zookeeper) LoadHostServiceState(hss *HostServiceState, hostID, ssID string) error {
 	return z.call(func(conn client.Connection) error {
-		return LoadHostServiceState(conn, hss, ssID, hostID)
+		return LoadHostServiceState(conn, hss, hostID, ssID)
 	})
 }
 
 // LoadHostServiceState loads a particular HostServiceState
-func LoadHostServiceState(conn client.Connection, hss *HostServiceState, ssID, hostID string) error {
+func LoadHostServiceState(conn client.Connection, hss *HostServiceState, hostID, ssID string) error {
 	msg := newHostServiceStateMessage(hss, hostID, ssID)
 	return get(conn, msg)
+}
+
+// LoadHostServiceStates loads all HostServiceStates for a particular HostID
+func (z *Zookeeper) LoadHostServiceStates(states *[]*HostServiceState, hostID string) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadHostServiceStates(conn, states, hostID)
+	})
+}
+
+// LoadHostServiceStates loads all HostServiceStates for a particular HostID
+func LoadHostServiceStates(conn client.Connection, states *[]*HostServiceState, hostID string) error {
+	msg := newHostServiceStateMessage(nil, hostID, "")
+	return children(conn, msg.path, func(ssID string) error {
+		var hss HostServiceState
+		if err := LoadHostServiceState(conn, &hss, hostID, ssID); err != nil {
+			return err
+		}
+		*states = append(*states, &hss)
+		return nil
+	})
 }
 
 // AddHostServiceState creates a new HostServiceState node
@@ -78,6 +114,19 @@ func (z *Zookeeper) UpdateHostServiceState(hss *HostServiceState) error {
 func UpdateHostServiceState(conn client.Connection, hss *HostServiceState) error {
 	msg := newHostServiceStateMessage(hss, hss.HostID, hss.ServiceStateID)
 	return update(conn, msg)
+}
+
+// RemoveHostServiceState removes an existing host service state
+func (z *Zookeeper) RemoveHostServiceState(hostID, ssID string) error {
+	return z.call(func(conn client.Connection) error {
+		return RemoveHostServiceState(conn, hostID, ssID)
+	})
+}
+
+// RemoveHostServiceState removes an existing host service state
+func RemoveHostServiceState(conn client.Connection, hostID, ssID string) error {
+	msg := newHostServiceStateMessage(nil, hostID, ssID)
+	return remove(conn, msg)
 }
 
 // LoadAndUpdateHostServiceState mutates a HostServiceState object with provided function

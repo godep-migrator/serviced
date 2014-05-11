@@ -1,7 +1,6 @@
 package zzk
 
 import (
-	"path"
 	"time"
 
 	"github.com/zenoss/serviced/coordinator/client"
@@ -10,6 +9,22 @@ import (
 
 func newServiceStateMessage(state *servicestate.ServiceState, serviceID, ssID string) *message {
 	return newMessage(state, zkService, serviceID, ssID)
+}
+
+// LoadServiceStatesW watches for service state changes for a particular serviceID
+func (z *Zookeeper) LoadServiceStatesW(states *[]*servicestate.ServiceState, serviceID string) (<-chan client.Event, error) {
+	return z.getW(func(conn client.Connection) (<-chan client.Event, error) {
+		return LoadServiceStatesW(conn, states, serviceID)
+	})
+}
+
+// LoadServiceStatesW watches for service state changes for a particular serviceID
+func LoadServiceStatesW(conn client.Connection, states *[]*servicestate.ServiceState, serviceID string) (<-chan client.Event, error) {
+	if err := LoadServiceStates(conn, states, serviceID); err != nil {
+		return nil, err
+	}
+	msg := newServiceMessage(nil, serviceID)
+	return childrenW(conn, msg.path)
 }
 
 // LoadServiceState loads a service state given its ID and serviceID
@@ -34,8 +49,8 @@ func (z *Zookeeper) LoadServiceStates(states *[]*servicestate.ServiceState, serv
 
 func LoadServiceStates(conn client.Connection, states *[]*servicestate.ServiceState, serviceIDs ...string) error {
 	for _, serviceID := range serviceIDs {
-		p := path.Join(zkService, serviceID)
-		err := children(conn, p, func(ssID string) error {
+		msg := newServiceMessage(nil, serviceID)
+		err := children(conn, msg.path, func(ssID string) error {
 			var state servicestate.ServiceState
 			if err := LoadServiceState(conn, &state, serviceID, ssID); err != nil {
 				return err
@@ -78,6 +93,22 @@ func (z *Zookeeper) UpdateServiceState(state *servicestate.ServiceState) error {
 func UpdateServiceState(conn client.Connection, state *servicestate.ServiceState) error {
 	msg := newServiceStateMessage(state, state.ServiceId, state.Id)
 	return update(conn, msg)
+}
+
+// RemoveServiceState removes an existing service state
+func (z *Zookeeper) RemoveServiceState(hostID, serviceID, ssID string) error {
+	return z.call(func(conn client.Connection) error {
+		return RemoveServiceState(conn, hostID, serviceID, ssID)
+	})
+}
+
+// RemoveServiceState removes an existing service state
+func RemoveServiceState(conn client.Connection, hostID, serviceID, ssID string) error {
+	if err := RemoveHostServiceState(conn, hostID, ssID); err != nil {
+		return err
+	}
+	msg := newServiceStateMessage(nil, serviceID, ssID)
+	return remove(conn, msg)
 }
 
 // LoadAndUpdateServiceState loads a service state and mutates it accordingly

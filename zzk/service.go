@@ -33,6 +33,21 @@ func LoadServiceW(conn client.Connection, service *service.Service, serviceID st
 	return getW(conn, msg)
 }
 
+// LoadServicesW returns a watch event that monitors all services
+func (z *Zookeeper) LoadServicesW(services *[]*service.Service) (<-chan client.Event, error) {
+	return z.getW(func(conn client.Connection) (<-chan client.Event, error) {
+		return LoadServicesW(conn, services)
+	})
+}
+
+// LoadServicesW returns a watch event that monitors all services
+func LoadServicesW(conn client.Connection, services *[]*service.Service) (<-chan client.Event, error) {
+	if err := LoadServices(conn, services); err != nil {
+		return nil, err
+	}
+	return childrenW(conn, zkService)
+}
+
 // LoadService loads a particular service
 func (z *Zookeeper) LoadService(service *service.Service, serviceID string) error {
 	return z.call(func(conn client.Connection) error {
@@ -44,6 +59,35 @@ func (z *Zookeeper) LoadService(service *service.Service, serviceID string) erro
 func LoadService(conn client.Connection, service *service.Service, serviceID string) error {
 	msg := newServiceMessage(service, serviceID)
 	return get(conn, msg)
+}
+
+// LoadServices loads all services
+func (z *Zookeeper) LoadServices(services *[]*service.Service) error {
+	return z.call(func(conn client.Connection) error {
+		return LoadServices(conn, services)
+	})
+}
+
+// LoadServices loads all services
+func LoadServices(conn client.Connection, services *[]*service.Service) error {
+	serviceMap := make(map[string]*service.Service)
+	err := children(conn, zkService, func(serviceID string) error {
+		if _, ok := serviceMap[serviceID]; !ok {
+			var service service.Service
+			if err := LoadService(conn, &service, serviceID); err != nil {
+				return err
+			}
+			serviceMap[serviceID] = &service
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, s := range serviceMap {
+		*services = append(*services, s)
+	}
+	return nil
 }
 
 // AddService creates a new service

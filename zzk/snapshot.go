@@ -1,7 +1,6 @@
 package zzk
 
 import (
-	"github.com/zenoss/glog"
 	"github.com/zenoss/serviced/coordinator/client"
 )
 
@@ -26,24 +25,6 @@ func newSnapshotMessage(snapshot *Snapshot, serviceID string) *message {
 	return newMessage(snapshot, zkSnapshot, serviceID)
 }
 
-// LoadSnapshotsW returns an event channel that indicates when there is a change to the snapshots node
-func (z *Zookeeper) LoadSnapshotsW(snapshots *[]*Snapshot) (<-chan client.Event, error) {
-	return z.getW(func(conn client.Connection) (<-chan client.Event, error) {
-		return LoadSnapshotsW(conn, snapshots)
-	})
-}
-
-// LoadSnapshotsW returns an event channel that indicates when there is a change to the snapshots node
-func LoadSnapshotsW(conn client.Connection, snapshots *[]*Snapshot) (<-chan client.Event, error) {
-	return childrenW(conn, zkSnapshot, func(serviceID string) {
-		var snapshot Snapshot
-		if err := LoadSnapshot(conn, &snapshot, serviceID); err != nil {
-			glog.Errorf("error loading snapshot: %s", err)
-		}
-		*snapshots = append(*snapshots, &snapshot)
-	})
-}
-
 // LoadSnapshotW returns an event channel that indicates when there is a change to a specific snapshot
 func (z *Zookeeper) LoadSnapshotW(snapshot *Snapshot, serviceID string) (<-chan client.Event, error) {
 	return z.getW(func(conn client.Connection) (<-chan client.Event, error) {
@@ -55,6 +36,21 @@ func (z *Zookeeper) LoadSnapshotW(snapshot *Snapshot, serviceID string) (<-chan 
 func LoadSnapshotW(conn client.Connection, snapshot *Snapshot, serviceID string) (<-chan client.Event, error) {
 	msg := newSnapshotMessage(snapshot, serviceID)
 	return getW(conn, msg)
+}
+
+// LoadSnapshotsW returns an event channel when there are any snapshot changes
+func (z *Zookeeper) LoadSnapshotsW(snapshots *[]*Snapshot) (<-chan client.Event, error) {
+	return z.getW(func(conn client.Connection) (<-chan client.Event, error) {
+		return LoadSnapshotsW(conn, snapshots)
+	})
+}
+
+// LoadSnapshotsW returns an event channel when there are any snapshot changes
+func LoadSnapshotsW(conn client.Connection, snapshots *[]*Snapshot) (<-chan client.Event, error) {
+	if err := LoadSnapshots(conn, snapshots); err != nil {
+		return nil, err
+	}
+	return childrenW(conn, zkSnapshot)
 }
 
 // LoadSnapshot loads a particular snaphot

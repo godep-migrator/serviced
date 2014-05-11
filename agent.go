@@ -188,44 +188,13 @@ func (a *HostAgent) attachToService(conn coordclient.Connection, procFinished ch
 	return true, nil
 }
 
-func markTerminated(conn coordclient.Connection, hss *zzk.HostServiceState) {
-	ssPath := zzk.ServiceStatePath(hss.ServiceId, hss.ServiceStateId)
-	exists, err := conn.Exists(ssPath)
-	if err != nil {
-		glog.V(0).Infof("Unable to get service state %s for delete because: %v", ssPath, err)
-		return
-	}
-	if exists {
-		err = conn.Delete(ssPath)
-		if err != nil {
-			glog.V(0).Infof("Unable to delete service state %s because: %v", ssPath, err)
-			return
-		}
-	}
-
-	hssPath := zzk.HostServiceStatePath(hss.HostId, hss.ServiceStateId)
-	exists, err = conn.Exists(hssPath)
-	if err != nil {
-		glog.V(0).Infof("Unable to get host service state %s for delete becaus: %v", hssPath, err)
-		return
-	}
-	if exists {
-		err = conn.Delete(hssPath)
-		if err != nil {
-			glog.V(0).Infof("Unable to delete host service state %s", hssPath)
-		}
-
-	}
-	return
-}
-
 // Terminate a particular service instance (serviceState) on the localhost.
 func (a *HostAgent) terminateInstance(conn coordclient.Connection, serviceState *servicestate.ServiceState) error {
 	err := a.dockerTerminate(serviceState.Id)
 	if err != nil {
 		return err
 	}
-	markTerminated(conn, zzk.SsToHss(serviceState))
+	zzk.RemoveServiceState(conn, serviceState.HostId, serviceState.ServiceId, serviceState.Id)
 	return nil
 }
 
@@ -235,7 +204,7 @@ func (a *HostAgent) terminateAttached(conn coordclient.Connection, procFinished 
 		return err
 	}
 	<-procFinished
-	markTerminated(conn, zzk.SsToHss(ss))
+	zzk.RemoveServiceState(conn, ss.HostId, ss.ServiceId, ss.Id)
 	return nil
 }
 
@@ -388,7 +357,7 @@ func (a *HostAgent) waitForProcessToDie(dc *docker.Client, conn coordclient.Conn
 
 		//start IP resource proxy for each endpoint
 		var service service.Service
-		if err = zzk.LoadService(conn, serviceState.ServiceId, &service); err != nil {
+		if err := zzk.LoadService(conn, &service, serviceState.ServiceId); err != nil {
 			glog.Warningf("Unable to read service %s: %v", serviceState.Id, err)
 		} else {
 			glog.V(4).Infof("Looking for address assignment in service %s:%s", service.Name, service.Id)
@@ -411,8 +380,8 @@ func (a *HostAgent) waitForProcessToDie(dc *docker.Client, conn coordclient.Conn
 
 		}
 
-		glog.V(1).Infof("SSPath: %s, PortMapping: %v", zzk.ServiceStatePath(serviceState.ServiceId, serviceState.Id), serviceState.PortMapping)
-
+		sspath := path.Join(serviceState.ServiceId, serviceState.Id)
+		glog.V(1).Infof("Service State: %s, Port Mapping: %v", sspath, serviceState.PortMapping)
 		loop := true
 		stateUpdateEvery := time.Tick(time.Second * 20)
 		for loop {
@@ -893,14 +862,14 @@ type stateResult struct {
 // startMissingChildren accepts a zookeeper connection (conn) and a slice of service instance ids (children),
 // a map of channels to signal running children stop, and a stateResult channel for children to signal when
 // they shutdown
-func (a *HostAgent) startMissingChildren(conn coordclient.Connection, children []string, processing map[string]chan int, ssDone chan stateResult) {
-	glog.V(1).Infof("Agent for %s processing %d children", a.hostID, len(children))
-	for _, childName := range children {
-		if processing[childName] == nil {
-			glog.V(2).Info("Agent starting goroutine to watch ", childName)
+func (a *HostAgent) startMissingChildren(conn coordclient.Connection, states []*zzk.HostServiceState, processing map[string]chan int, ssDone chan stateResult) {
+	glog.V(1).Infof("Agent for %s processing %d children", a.hostID, len(states))
+	for _, hss := range states {
+		if processing[hss.ServiceStateID] == nil {
+			glog.V(2).Info("Agent starting goroutine to watch ", hss.ServiceStateID)
 			childChannel := make(chan int, 1)
-			processing[childName] = childChannel
-			go a.processServiceState(conn, childChannel, ssDone, childName)
+			processing[hss.ServiceStateID] = childChannel
+			go a.processServiceState(conn, childChannel, ssDone, hss.ServiceStateID)
 		}
 	}
 	return
@@ -931,15 +900,9 @@ func (a *HostAgent) processChildrenAndWait(conn coordclient.Connection) bool {
 	processing := make(map[string]chan int)
 	ssDone := make(chan stateResult, 25)
 
-	hostPath := zzk.HostPath(a.hostID)
-
 	for {
-
-		glog.V(3).Infof("creating hostdir: %s", hostPath)
-		conn.CreateDir(hostPath)
-
-		glog.V(3).Infof("getting children of %s", hostPath)
-		children, zkEvent, err := conn.ChildrenW(hostPath)
+		var states []*zzk.HostServiceState
+		zkEvent, err := zzk.LoadHostServiceStatesW(conn, &states, a.hostID)
 		if err != nil {
 			glog.V(0).Infof("Unable to read children, retrying: %s", err)
 			select {
@@ -952,10 +915,9 @@ func (a *HostAgent) processChildrenAndWait(conn coordclient.Connection) bool {
 				return false
 			}
 		}
-		a.startMissingChildren(conn, children, processing, ssDone)
+		a.startMissingChildren(conn, states, processing, ssDone)
 
 		select {
-
 		case errc := <-a.closing:
 			glog.V(1).Info("Agent received interrupt")
 			err = waitForSsNodes(processing, ssDone)
@@ -978,36 +940,37 @@ func (a *HostAgent) processServiceState(conn coordclient.Connection, shutdown <-
 
 	for {
 		var hss zzk.HostServiceState
-		zkEvent, err := zzk.LoadHostServiceStateW(conn, a.hostID, ssID, &hss)
+		zkEvent, err := zzk.LoadHostServiceStateW(conn, &hss, a.hostID, ssID)
 		if err != nil {
 			errS := fmt.Sprintf("Unable to load host service state %s: %v", ssID, err)
 			glog.Error(errS)
 			done <- stateResult{ssID, errors.New(errS)}
 			return
 		}
-		if len(hss.ServiceStateId) == 0 || len(hss.ServiceId) == 0 {
-			errS := fmt.Sprintf("Service for %s is invalid", zzk.HostServiceStatePath(a.hostID, ssID))
+		if hss.ServiceStateID == "" || hss.ServiceID == "" {
+			sspath := path.Join(hss.ServiceID, hss.ServiceStateID)
+			errS := fmt.Errorf("service for %s is invalid", sspath)
 			glog.Error(errS)
-			done <- stateResult{ssID, errors.New(errS)}
+			done <- stateResult{ssID, errS}
 			return
 		}
 
 		var ss servicestate.ServiceState
-		if err := zzk.LoadServiceState(conn, hss.ServiceId, hss.ServiceStateId, &ss); err != nil {
-			errS := fmt.Sprintf("Host service state unable to load service state %s", ssID)
+		if err := zzk.LoadServiceState(conn, &ss, hss.ServiceID, hss.ServiceStateID); err != nil {
+			errS := fmt.Errorf("host service state unable to load service state %s", ssID)
 			glog.Error(errS)
 			// This goroutine is watching a node for a service state that does not
 			// exist or could not be loaded. We should *probably* delete this node.
-			hssPath := zzk.HostServiceStatePath(a.hostID, ssID)
-			if err := conn.Delete(hssPath); err != nil {
-				glog.Warningf("Unable to delete host service state %s", hssPath)
+			if err := zzk.RemoveHostServiceState(conn, a.hostID, ssID); err != nil {
+				sspath := path.Join(a.hostID, ssID)
+				glog.Warningf("Unable to delete host service state %s", sspath)
 			}
-			done <- stateResult{ssID, errors.New(errS)}
+			done <- stateResult{ssID, errS}
 			return
 		}
 
 		var service service.Service
-		if err := zzk.LoadService(conn, ss.ServiceId, &service); err != nil {
+		if err := zzk.LoadService(conn, &service, ss.ServiceId); err != nil {
 			errS := fmt.Sprintf("Host service state unable to load service %s", ss.ServiceId)
 			glog.Errorf(errS)
 			done <- stateResult{ssID, errors.New(errS)}
