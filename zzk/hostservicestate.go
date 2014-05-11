@@ -2,7 +2,7 @@ package zzk
 
 import (
 	"github.com/zenoss/serviced/coordinator/client"
-	"github.com/zenoss/serviced/dao"
+	"github.com/zenoss/serviced/domain/service"
 	"github.com/zenoss/serviced/domain/servicestate"
 )
 
@@ -20,7 +20,7 @@ func NewHostServiceState(state *servicestate.ServiceState) *HostServiceState {
 		HostID:         state.HostId,
 		ServiceID:      state.ServiceId,
 		ServiceStateID: state.Id,
-		DesiredState:   dao.SVC_RUN,
+		DesiredState:   service.SVCRun,
 	}
 }
 
@@ -156,6 +156,6 @@ func (z *Zookeeper) TerminateHostService(hostID, ssID string) error {
 // TerminateHostService terminates a ServiceState on a host
 func TerminateHostService(conn client.Connection, hostID, ssID string) error {
 	return LoadAndUpdateHostServiceState(conn, hostID, ssID, func(hss *HostServiceState) {
-		(*hss).DesiredState = dao.SVC_STOP
+		(*hss).DesiredState = service.SVCStop
 	})
 }
