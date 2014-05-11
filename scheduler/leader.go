@@ -8,6 +8,7 @@ import (
 	coordclient "github.com/zenoss/serviced/coordinator/client"
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/datastore"
+	"github.com/zenoss/serviced/domain/addressassignment"
 	"github.com/zenoss/serviced/domain/host"
 	"github.com/zenoss/serviced/domain/service"
 	"github.com/zenoss/serviced/domain/servicestate"
@@ -160,10 +161,10 @@ func (l *leader) watchService(shutdown <-chan interface{}, done chan<- string, s
 		}
 
 		switch {
-		case service.DesiredState == dao.SVC_STOP:
-			shutdownServiceInstances(conn, states, len(states))
-		case service.DesiredState == dao.SVC_RUN:
-			l.updateServiceInstances(&service, states)
+		case svc.DesiredState == service.SVCStop:
+			shutdownServiceInstances(l.conn, serviceStates, len(serviceStates))
+		case svc.DesiredState == service.SVCRun:
+			l.updateServiceInstances(&svc, serviceStates)
 		default:
 			glog.Warningf("Unexpected desired state %d for service %s", service.DesiredState, service.Name)
 		}
@@ -296,7 +297,7 @@ func shutdownServiceInstances(conn coordclient.Connection, serviceStates []*serv
 func (l *leader) selectPoolHostForService(s *service.Service, hosts []*host.Host) (*host.Host, error) {
 	var hostid string
 	for _, ep := range s.Endpoints {
-		if ep.AddressAssignment != (service.AddressAssignment{}) {
+		if ep.AddressAssignment != (addressassignment.AddressAssignment{}) {
 			hostid = ep.AddressAssignment.HostID
 			break
 		}
