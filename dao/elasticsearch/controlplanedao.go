@@ -174,7 +174,7 @@ type ControlPlaneDao struct {
 	varpath  string
 	vfs      string
 	zclient  *coordclient.Client
-	zkDao    *zzk.ZkDao
+	zkDao    *zzk.Zookeeper
 	dfs      *dfs.DistributedFileSystem
 	//needed while we move things over
 	facade         *facade.Facade
@@ -279,9 +279,8 @@ func (this *ControlPlaneDao) GetServiceEndpoints(serviceId string, response *map
 		//build 'OR' query to grab all service states with in "service" tree
 		relatedServiceIds := walkTree(topService)
 		var states []*servicestate.ServiceState
-		err = this.zkDao.GetServiceStates(&states, relatedServiceIds...)
-		if err != nil {
-			return
+		if err := this.zkDao.LoadServiceStates(&states, relatedServiceIds...); err != nil {
+			return err
 		}
 
 		// for each proxied port, find list of potential remote endpoints
@@ -567,22 +566,21 @@ func (this *ControlPlaneDao) GetService(id string, myService *service.Service) e
 }
 
 func (this *ControlPlaneDao) GetRunningServices(request dao.EntityRequest, services *[]*dao.RunningService) error {
-	return this.zkDao.GetAllRunningServices(services)
+	return this.zkDao.LoadRunningServices(services)
 }
 
 func (this *ControlPlaneDao) GetRunningServicesForHost(hostId string, services *[]*dao.RunningService) error {
-	return this.zkDao.GetRunningServicesForHost(hostId, services)
+	return this.zkDao.LoadRunningServicesByHost(services, hostId)
 }
 
 func (this *ControlPlaneDao) GetRunningServicesForService(serviceId string, services *[]*dao.RunningService) error {
-	return this.zkDao.GetRunningServicesForService(serviceId, services)
+	return this.zkDao.LoadRunningServicesByService(services, serviceId)
 }
 
 func (this *ControlPlaneDao) GetServiceLogs(id string, logs *string) error {
 	glog.V(3).Info("ControlPlaneDao.GetServiceLogs id=", id)
 	var serviceStates []*servicestate.ServiceState
-	err := this.zkDao.GetServiceStates(&serviceStates, id)
-	if err != nil {
+	if err := this.zkDao.LoadServiceStates(&serviceStates, id); err != nil {
 		return err
 	}
 	if len(serviceStates) == 0 {
@@ -603,9 +601,8 @@ func (this *ControlPlaneDao) GetServiceStateLogs(request dao.ServiceStateRequest
 	/* TODO: This command does not support logs on other hosts */
 	glog.V(3).Info("ControlPlaneDao.GetServiceStateLogs id=", request)
 	var serviceState servicestate.ServiceState
-	err := this.zkDao.GetServiceState(&serviceState, request.ServiceId, request.ServiceStateId)
-	if err != nil {
-		glog.Errorf("ControlPlaneDao.GetServiceStateLogs servicestate=%+v err=%s", serviceState, err)
+	if err := this.zkDao.LoadServiceState(&serviceState, request.ServiceId, request.ServiceStateId); err != nil {
+		glog.Errorf("ControlPlaneDAO.GetServiceStateLogs servicestate=%+v err=%s", serviceState, err)
 		return err
 	}
 
@@ -892,23 +889,23 @@ func (this *ControlPlaneDao) walkServices(serviceID string, visitFn service.Visi
 
 func (this *ControlPlaneDao) GetServiceState(request dao.ServiceStateRequest, serviceState *servicestate.ServiceState) error {
 	glog.V(3).Infof("ControlPlaneDao.GetServiceState: request=%v", request)
-	return this.zkDao.GetServiceState(serviceState, request.ServiceId, request.ServiceStateId)
+	return this.zkDao.LoadServiceState(serviceState, request.ServiceId, request.ServiceStateId)
 }
 
 func (this *ControlPlaneDao) GetRunningService(request dao.ServiceStateRequest, running *dao.RunningService) error {
 	glog.V(3).Infof("ControlPlaneDao.GetRunningService: request=%v", request)
-	return this.zkDao.GetRunningService(request.ServiceId, request.ServiceStateId, running)
+	return this.zkDao.LoadRunningService(running, request.ServiceId, request.ServiceStateId)
 }
 
 func (this *ControlPlaneDao) GetServiceStates(serviceId string, serviceStates *[]*servicestate.ServiceState) error {
 	glog.V(2).Infof("ControlPlaneDao.GetServiceStates: serviceId=%s", serviceId)
-	return this.zkDao.GetServiceStates(serviceStates, serviceId)
+	return this.zkDao.LoadServiceStates(serviceStates, serviceId)
 }
 
 /* This method assumes that if a service instance exists, it has not yet been terminated */
 func (this *ControlPlaneDao) getNonTerminatedServiceStates(serviceId string, serviceStates *[]*servicestate.ServiceState) error {
 	glog.V(2).Infof("ControlPlaneDao.getNonTerminatedServiceStates: serviceId=%s", serviceId)
-	return this.zkDao.GetServiceStates(serviceStates, serviceId)
+	return this.zkDao.LoadServiceStates(serviceStates, serviceId)
 }
 
 // Update the current state of a service instance.
@@ -1359,6 +1356,7 @@ func (this *ControlPlaneDao) Snapshot(serviceId string, label *string) error {
 	glog.V(3).Infof("ControlPlaneDao.Snapshot entering snapshot with service=%s", serviceId)
 	defer glog.V(3).Infof("ControlPlaneDao.Snapshot finished snapshot for service=%s", serviceId)
 
+	// TODO: I am not sure why this is here????
 	var tenantId string
 	if err := this.GetTenantId(serviceId, &tenantId); err != nil {
 		glog.V(2).Infof("ControlPlaneDao: dao.LocalSnapshot err=%s", err)
@@ -1366,48 +1364,42 @@ func (this *ControlPlaneDao) Snapshot(serviceId string, label *string) error {
 	}
 
 	// request a snapshot by placing request znode in zookeeper - leader will notice
-	snapshotRequest, err := dao.NewSnapshotRequest(serviceId, "")
-	if err != nil {
-		glog.V(2).Infof("ControlPlaneDao: dao.NewSnapshotRequest err=%s", err)
-		return err
-	}
-	if err := this.zkDao.AddSnapshotRequest(snapshotRequest); err != nil {
+	request := zzk.Snapshot{ServiceID: serviceId}
+	if err := this.zkDao.AddSnapshot(&request); err != nil {
 		glog.V(2).Infof("ControlPlaneDao.zkDao.AddSnapshotRequest err=%s", err)
 		return err
 	}
-	// TODO:
-	//	requestId := snapshotRequest.Id
-	//	defer this.zkDao.RemoveSnapshotRequest(requestId)
 
-	glog.Infof("added snapshot request: %+v", snapshotRequest)
-
-	// wait for completion of snapshot request - check only once a second
-	// BEWARE: this.zkDao.LoadSnapshotRequestW does not block like it should
-	//         thus cannot use idiomatic select on eventChan and time.After() channels
-	timeOutValue := time.Second * 60
-	endTime := time.Now().Add(timeOutValue)
-	for time.Now().Before(endTime) {
-		glog.V(2).Infof("watching for snapshot completion for request: %+v", snapshotRequest)
-		_, err := this.zkDao.LoadSnapshotRequestW(snapshotRequest.Id, snapshotRequest)
-		switch {
-		case err != nil:
-			glog.Infof("failed snapshot request: %+v  error: %s", snapshotRequest, err)
+	for {
+		var response zzk.Snapshot
+		evt, err := this.zkDao.LoadSnapshotW(&response, serviceId)
+		if err != nil {
+			glog.Infof("failed snapshot request: %s error: %s", serviceId, err)
 			return err
-		case snapshotRequest.SnapshotError != "":
-			glog.Infof("failed snapshot request: %+v  error: %s", snapshotRequest, snapshotRequest.SnapshotError)
-			return errors.New(snapshotRequest.SnapshotError)
-		case snapshotRequest.SnapshotLabel != "":
-			*label = snapshotRequest.SnapshotLabel
-			glog.Infof("completed snapshot request: %+v  label: %s", snapshotRequest, *label)
-			return nil
+		}
+		if response.Done() {
+			glog.V(0).Infof("completed snapshot request for service %s", response.ServiceID)
+			if err := this.zkDao.RemoveSnapshot(response.ServiceID); err != nil {
+				glog.Warningf("Could not delete znode snapshot: %s", response.ServiceID)
+			}
+			*label = response.Label
+			return response.Error
 		}
 
-		time.Sleep(1 * time.Second)
+		for {
+			select {
+			case <-evt:
+				// Something changed!  Lets find out what!
+				break
+			case <-time.After(60 * time.Second):
+				// Time out waiting for snapshot.  TODO: should make this customizable?
+				err := fmt.Errorf("timed out waiting for snapshot: %s", serviceId)
+				glog.Error(err)
+				return err
+			}
+		}
 	}
-
-	err = fmt.Errorf("timed out waiting %v for snapshot: %+v", timeOutValue, snapshotRequest)
-	glog.Error(err)
-	return err
+	panic("you should never get here")
 }
 
 func (this *ControlPlaneDao) GetVolume(serviceId string, theVolume *volume.Volume) error {
@@ -1576,7 +1568,7 @@ func NewControlSvc(hostName string, port int, facade *facade.Facade, zclient *co
 	s.vfs = vfs
 
 	s.zclient = zclient
-	s.zkDao = zzk.NewZkDao(zclient)
+	s.zkDao = zzk.New(zclient)
 
 	// create the account credentials
 	if err = createSystemUser(s); err != nil {

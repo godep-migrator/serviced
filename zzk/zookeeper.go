@@ -25,11 +25,11 @@ func (m *message) SetVersion(version interface{}) { m.version = version }
 
 // Zookeeper sends payloads to the zookeeper server
 type Zookeeper struct {
-	client client.Client
+	client *client.Client
 }
 
 // New initializes a new zookeeper construct
-func New(client client.Client) *Zookeeper {
+func New(client *client.Client) *Zookeeper {
 	return &Zookeeper{
 		client: client,
 	}

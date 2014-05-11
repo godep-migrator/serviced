@@ -975,8 +975,8 @@ func (a *HostAgent) processServiceState(conn coordclient.Connection, shutdown <-
 			return
 		}
 
-		var service service.Service
-		if err := zzk.LoadService(conn, &service, ss.ServiceId); err != nil {
+		var svc service.Service
+		if err := zzk.LoadService(conn, &svc, ss.ServiceId); err != nil {
 			errS := fmt.Sprintf("Host service state unable to load service %s", ss.ServiceId)
 			glog.Errorf(errS)
 			done <- stateResult{ssID, errors.New(errS)}

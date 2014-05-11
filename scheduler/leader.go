@@ -145,8 +145,8 @@ func (l *leader) watchService(shutdown <-chan interface{}, done chan<- string, s
 
 	for {
 		// watch for changes on the service
-		var service service.Service
-		svcEvent, err := zzk.LoadServiceW(conn, &service, serviceID)
+		var svc service.Service
+		svcEvent, err := zzk.LoadServiceW(conn, &svc, serviceID)
 		if err != nil {
 			glog.Errorf("Leader unable to load service %s: %v", serviceID, err)
 			return
@@ -162,11 +162,11 @@ func (l *leader) watchService(shutdown <-chan interface{}, done chan<- string, s
 
 		switch {
 		case svc.DesiredState == service.SVCStop:
-			shutdownServiceInstances(l.conn, serviceStates, len(serviceStates))
+			shutdownServiceInstances(l.conn, states, len(states))
 		case svc.DesiredState == service.SVCRun:
-			l.updateServiceInstances(&svc, serviceStates)
+			l.updateServiceInstances(&svc, states)
 		default:
-			glog.Warningf("Unexpected desired state %d for service %s", service.DesiredState, service.Name)
+			glog.Warningf("Unexpected desired state %d for service %s", svc.DesiredState, svc.Name)
 		}
 
 		select {
@@ -176,11 +176,11 @@ func (l *leader) watchService(shutdown <-chan interface{}, done chan<- string, s
 				shutdownServiceInstances(conn, states, len(states))
 				return
 			}
-			glog.V(2).Infof("Service %s received event: %v", service.Name, event)
+			glog.V(2).Infof("Service %s received event: %v", svc.Name, event)
 		case event := <-stateEvent:
-			glog.V(2).Infof("Service %s received child event: %v", service.Name, event)
+			glog.V(2).Infof("Service %s received child event: %v", svc.Name, event)
 		case <-shutdown:
-			glog.V(2).Infof("Leader stopping watch on %s", service.Name)
+			glog.V(2).Infof("Leader stopping watch on %s", svc.Name)
 			return
 		}
 	}
