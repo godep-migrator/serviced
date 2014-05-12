@@ -126,13 +126,13 @@ func (l *leader) watchServices() {
 			glog.Errorf("Leader could not watch services: %s", err)
 			return
 		}
-		<-evt
 		for _, s := range services {
 			if _, ok := processing[s.Id]; !ok {
 				processing[s.Id] = nil
 				go l.watchService(shutdown, done, s.Id)
 			}
 		}
+		<-evt
 	}
 }
 
