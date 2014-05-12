@@ -113,13 +113,6 @@ func (l *leader) watchServices() {
 	glog.V(0).Infof("Leader waiting for service changes")
 	defer glog.V(1).Infof("Leader done waiting for service changes")
 	for {
-		// clean up any finished services
-		select {
-		case serviceID := <-done:
-			glog.V(2).Infof("Leader cleaning up service: %s", serviceID)
-			delete(processing, serviceID)
-		}
-
 		var services []*service.Service
 		evt, err := zzk.LoadServicesW(conn, &services)
 		if err != nil {
@@ -132,7 +125,18 @@ func (l *leader) watchServices() {
 				go l.watchService(shutdown, done, s.Id)
 			}
 		}
-		<-evt
+
+		for {
+			select {
+			case serviceID := <-done:
+				// clean up any finished services
+				glog.V(2).Infof("Leader cleaning up service: %s", serviceID)
+				delete(processing, serviceID)
+			case <-evt:
+				// received an event on the node
+				break
+			}
+		}
 	}
 }
 

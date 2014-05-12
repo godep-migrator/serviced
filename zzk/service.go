@@ -42,6 +42,9 @@ func (z *Zookeeper) LoadServicesW(services *[]*service.Service) (<-chan client.E
 
 // LoadServicesW returns a watch event that monitors all services
 func LoadServicesW(conn client.Connection, services *[]*service.Service) (<-chan client.Event, error) {
+	if err := mkdir(conn, zkService); err != nil {
+		return nil, err
+	}
 	if err := LoadServices(conn, services); err != nil {
 		return nil, err
 	}

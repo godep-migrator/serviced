@@ -20,6 +20,7 @@ func (z *Zookeeper) LoadServiceStatesW(states *[]*servicestate.ServiceState, ser
 
 // LoadServiceStatesW watches for service state changes for a particular serviceID
 func LoadServiceStatesW(conn client.Connection, states *[]*servicestate.ServiceState, serviceID string) (<-chan client.Event, error) {
+	// If node doesn't exist, return
 	if err := LoadServiceStates(conn, states, serviceID); err != nil {
 		return nil, err
 	}

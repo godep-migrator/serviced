@@ -47,9 +47,14 @@ func (z *Zookeeper) LoadSnapshotsW(snapshots *[]*Snapshot) (<-chan client.Event,
 
 // LoadSnapshotsW returns an event channel when there are any snapshot changes
 func LoadSnapshotsW(conn client.Connection, snapshots *[]*Snapshot) (<-chan client.Event, error) {
+	if err := mkdir(conn, zkSnapshot); err != nil {
+		return nil, err
+	}
+
 	if err := LoadSnapshots(conn, snapshots); err != nil {
 		return nil, err
 	}
+
 	return childrenW(conn, zkSnapshot)
 }
 

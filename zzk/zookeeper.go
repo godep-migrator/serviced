@@ -64,10 +64,6 @@ func getW(conn client.Connection, msg *message) (<-chan client.Event, error) {
 }
 
 func childrenW(conn client.Connection, path string) (<-chan client.Event, error) {
-	// Make the path if it doesn't exist
-	if err := mkdir(conn, path); err != nil {
-		return nil, err
-	}
 	// Get the event channel
 	_, event, err := conn.ChildrenW(path)
 	if err != nil {

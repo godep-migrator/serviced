@@ -50,6 +50,7 @@ func (z *Zookeeper) LoadHostServiceStatesW(states *[]*HostServiceState, hostID s
 
 // LoadHostServiceStatesW returns a watch for a HostServiceState host node
 func LoadHostServiceStatesW(conn client.Connection, states *[]*HostServiceState, hostID string) (<-chan client.Event, error) {
+	// If no states exist, return error
 	if err := LoadHostServiceStates(conn, states, hostID); err != nil {
 		return nil, err
 	}
