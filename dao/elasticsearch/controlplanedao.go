@@ -12,8 +12,6 @@ package elasticsearch
 import (
 	dutils "github.com/dotcloud/docker/utils"
 	"github.com/mattbaird/elastigo/api"
-	"github.com/mattbaird/elastigo/core"
-	"github.com/mattbaird/elastigo/indices"
 	"github.com/zenoss/glog"
 	docker "github.com/zenoss/go-dockerclient"
 	"github.com/zenoss/serviced/commons"
@@ -31,11 +29,8 @@ import (
 	"github.com/zenoss/serviced/volume"
 	"github.com/zenoss/serviced/zzk"
 
-	"crypto/sha1"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -55,119 +50,6 @@ const (
 //assert interface
 var _ dao.ControlPlane = &ControlPlaneDao{}
 
-// NotFoundError is a typed error.
-type NotFoundError struct {
-	s string
-}
-
-func (e *NotFoundError) Error() string {
-	return e.s
-}
-
-// New returns an error that formats as the given text.
-func NewNotFoundError(text string) error {
-	return &NotFoundError{text}
-}
-
-// closure for geting a model
-func getSource(index string, _type string) func(string, interface{}) error {
-	return func(id string, source interface{}) error {
-		return core.GetSource(index, _type, id, &source)
-	}
-}
-
-// closure for searching a model
-func searchUri(index string, _type string) func(string) (core.SearchResult, error) {
-	return func(query string) (core.SearchResult, error) {
-		return core.SearchUri(index, _type, query, "", 0)
-	}
-}
-
-// closure for testing model existence
-func exists(pretty *bool, index string, _type string) func(string) (bool, error) {
-	return func(id string) (bool, error) {
-		return core.Exists(*pretty, index, _type, id)
-	}
-}
-
-// closure for indexing a model
-func create(pretty *bool, index string, _type string) func(string, interface{}) (api.BaseResponse, error) {
-	var (
-		parentId  string = ""
-		version   int    = 0
-		op_type   string = "create"
-		routing   string = ""
-		timestamp string = ""
-		ttl       int    = 0
-		percolate string = ""
-		timeout   string = ""
-		refresh   bool   = true
-	)
-	return func(id string, data interface{}) (api.BaseResponse, error) {
-		return core.IndexWithParameters(
-			*pretty, index, _type, id, parentId, version, op_type, routing, timestamp, ttl, percolate, timeout, refresh, data)
-	}
-}
-
-// closure for indexing a model
-func index(pretty *bool, index string, _type string) func(string, interface{}) (api.BaseResponse, error) {
-	var (
-		parentId  string = ""
-		version   int    = 0
-		op_type   string = ""
-		routing   string = ""
-		timestamp string = ""
-		ttl       int    = 0
-		percolate string = ""
-		timeout   string = ""
-		refresh   bool   = true
-	)
-	return func(id string, data interface{}) (api.BaseResponse, error) {
-		return core.IndexWithParameters(
-			*pretty, index, _type, id, parentId, version, op_type, routing, timestamp, ttl, percolate, timeout, refresh, data)
-	}
-}
-
-// closure for deleting a model
-func _delete(pretty *bool, index string, _type string) func(string) (api.BaseResponse, error) {
-	return func(id string) (api.BaseResponse, error) {
-		r, err := core.Delete(*pretty, index, _type, id, -1, "")
-		if err != nil {
-			return r, err
-		}
-		indices.Refresh(index)
-		return r, err
-	}
-}
-
-var (
-	//enable pretty printed responses
-	Pretty bool = false
-
-	//model existance functions
-	userExists func(string) (bool, error) = exists(&Pretty, "controlplane", "user")
-
-	//model index functions
-	newUser func(string, interface{}) (api.BaseResponse, error) = create(&Pretty, "controlplane", "user")
-
-	//model index functions
-	indexUser func(string, interface{}) (api.BaseResponse, error) = index(&Pretty, "controlplane", "user")
-
-	//model delete functions
-	deleteUser func(string) (api.BaseResponse, error) = _delete(&Pretty, "controlplane", "user")
-
-	//model get functions
-	getUser func(string, interface{}) error = getSource("controlplane", "user")
-
-	//model search functions, using uri based query
-	searchUserUri func(string) (core.SearchResult, error) = searchUri("controlplane", "user")
-)
-
-// each time Serviced starts up a new password will be generated. This will be passed into
-// the containers so that they can authenticate against the API
-var SYSTEM_USER_NAME = "system_user"
-var INSTANCE_PASSWORD string
-
 type ControlPlaneDao struct {
 	hostName string
 	port     int
@@ -179,24 +61,6 @@ type ControlPlaneDao struct {
 	//needed while we move things over
 	facade         *facade.Facade
 	dockerRegistry string
-}
-
-// convert search result of json host to dao.Host array
-func toAddressAssignments(result *core.SearchResult) (*[]addressassignment.AddressAssignment, error) {
-	var err error = nil
-	var total = len(result.Hits.Hits)
-	var addressAssignments = make([]addressassignment.AddressAssignment, total)
-	for i := 0; i < total; i += 1 {
-		var addressAssignment addressassignment.AddressAssignment
-		err = json.Unmarshal(result.Hits.Hits[i].Source, &addressAssignment)
-		if err == nil {
-			addressAssignments[i] = addressAssignment
-		} else {
-			return nil, err
-		}
-	}
-
-	return &addressAssignments, err
 }
 
 func walkTree(node *treenode) []string {
@@ -332,28 +196,6 @@ func (this *ControlPlaneDao) GetServiceEndpoints(serviceId string, response *map
 	return
 }
 
-//hashPassword returns the sha-1 of a password
-func hashPassword(password string) string {
-	h := sha1.New()
-	io.WriteString(h, password)
-	return fmt.Sprintf("% x", h.Sum(nil))
-}
-
-//addUser places a new user record into elastic searchp
-func (this *ControlPlaneDao) AddUser(user dao.User, userName *string) error {
-	glog.V(2).Infof("ControlPlane.NewUser: %+v", user)
-	name := strings.TrimSpace(*userName)
-	user.Password = hashPassword(user.Password)
-
-	// save the user
-	response, err := newUser(name, user)
-	if response.Ok {
-		*userName = name
-		return nil
-	}
-	return err
-}
-
 // The tenant id is the root service uuid. Walk the service tree to root to find the tenant id.
 func (this *ControlPlaneDao) GetTenantId(serviceId string, tenantId *string) (err error) {
 	glog.V(2).Infof("ControlPlaneDao.GetTenantId: %s", serviceId)
@@ -409,26 +251,6 @@ func (this *ControlPlaneDao) AddService(svc service.Service, serviceId *string) 
 	return this.zkDao.AddService(&svc)
 }
 
-//UpdateUser updates the user entry in elastic search. NOTE: It is assumed the
-//pasword is NOT hashed when updating the user record
-func (this *ControlPlaneDao) UpdateUser(user dao.User, unused *int) error {
-	glog.V(2).Infof("ControlPlaneDao.UpdateUser: %+v", user)
-
-	id := strings.TrimSpace(user.Name)
-	if id == "" {
-		return errors.New("empty User.Name not allowed")
-	}
-
-	user.Name = id
-	user.Password = hashPassword(user.Password)
-	response, err := indexUser(id, user)
-	glog.V(2).Infof("ControlPlaneDao.UpdateUser response: %+v", response)
-	if response.Ok {
-		return nil
-	}
-	return err
-}
-
 // updateService internal method to use when service has been validated
 func (this *ControlPlaneDao) updateService(svc *service.Service) error {
 	id := strings.TrimSpace(svc.Id)
@@ -473,14 +295,6 @@ func (this *ControlPlaneDao) UpdateService(svc service.Service, unused *int) err
 	return this.updateService(&svc)
 }
 
-// RemoveUser removes the user specified by the userName string
-func (this *ControlPlaneDao) RemoveUser(userName string, unused *int) error {
-	glog.V(2).Infof("ControlPlaneDao.RemoveUser: %s", userName)
-	response, err := deleteUser(userName)
-	glog.V(2).Infof("ControlPlaneDao.RemoveUser response: %+v", response)
-	return err
-}
-
 //
 func (this *ControlPlaneDao) RemoveService(id string, unused *int) error {
 	//TODO: should services already be stopped before removing to prevent half running service in case of error while deleting?
@@ -509,49 +323,6 @@ func (this *ControlPlaneDao) RemoveService(id string, unused *int) error {
 		return err
 	}
 	//TODO: remove AddressAssignments with this Service
-	return nil
-}
-
-func (this *ControlPlaneDao) GetUser(userName string, user *dao.User) error {
-	glog.V(2).Infof("ControlPlaneDao.GetUser: userName=%s", userName)
-	request := dao.User{}
-	err := getUser(userName, &request)
-	glog.V(2).Infof("ControlPlaneDao.GetUser: userName=%s, user=%+v, err=%s", userName, request, err)
-	*user = request
-	return err
-}
-
-//ValidateCredentials takes a user name and password and validates them against a stored user
-func (this *ControlPlaneDao) ValidateCredentials(user dao.User, result *bool) error {
-	glog.V(2).Infof("ControlPlaneDao.ValidateCredentials: userName=%s", user.Name)
-	storedUser := dao.User{}
-	err := this.GetUser(user.Name, &storedUser)
-	if err != nil {
-		*result = false
-		return err
-	}
-
-	// hash the passed in password
-	hashedPassword := hashPassword(user.Password)
-
-	// confirm the password
-	if storedUser.Password != hashedPassword {
-		*result = false
-		return nil
-	}
-
-	// at this point we found the user and confirmed the password
-	*result = true
-	return nil
-}
-
-//GetSystemUser returns the system user's credentials. The "unused int" is required by the RPC interface.
-func (this *ControlPlaneDao) GetSystemUser(unused int, user *dao.User) error {
-	systemUser := dao.User{
-		Name:     SYSTEM_USER_NAME,
-		Password: INSTANCE_PASSWORD,
-	}
-	*user = systemUser
 	return nil
 }
 
@@ -654,40 +425,6 @@ func (this *ControlPlaneDao) GetTaggedServices(request dao.EntityRequest, servic
 	}
 }
 
-func (this *ControlPlaneDao) initializedAddressConfig(endpoint service.ServiceEndpoint) bool {
-	// has nothing defined in the service definition
-	if endpoint.AddressConfig.Port == 0 && endpoint.AddressConfig.Protocol == "" {
-		return false
-	}
-	return true
-}
-
-func (this *ControlPlaneDao) needsAddressAssignment(serviceID string, endpoint service.ServiceEndpoint) (bool, string, error) {
-	// does the endpoint's AddressConfig have any config associated with it?
-	if this.initializedAddressConfig(endpoint) {
-		addressAssignment, err := this.getEndpointAddressAssignments(serviceID, endpoint.Name)
-		if err != nil {
-			glog.Errorf("getEndpointAddressAssignments failed: %v", err)
-			return false, "", err
-		}
-
-		// if there exists some AddressConfig that is initialized to anything (port and protocol are not the default values)
-		// and there does NOT exist an AddressAssignment corresponding to this AddressConfig
-		// then this service needs an AddressAssignment
-		if addressAssignment == nil {
-			glog.Infof("Service: %s endpoint: %s needs an address assignment", serviceID, endpoint.Name)
-			return true, "", nil
-		}
-
-		// if there exists some AddressConfig that is initialized to anything (port and protocol are not the default values)
-		// and there already exists an AddressAssignment corresponding to this AddressConfig
-		// then this service does NOT need an AddressAssignment (as one already exists)
-		return false, addressAssignment.ID, nil
-	}
-
-	// this endpoint has no need for an AddressAssignment ever
-	return false, "", nil
-}
 
 // determine whether the services are ready for deployment
 func (this *ControlPlaneDao) validateServicesForStarting(svc *service.Service, _ *struct{}) error {
@@ -1130,157 +867,7 @@ func (this *ControlPlaneDao) RemoveServiceTemplate(id string, unused *int) error
 	return nil
 }
 
-// RemoveAddressAssignemnt Removes an AddressAssignment by id
-func (this *ControlPlaneDao) RemoveAddressAssignment(id string, _ *struct{}) error {
-	store := addressassignment.NewStore()
-	key := addressassignment.Key(id)
 
-	var assignment addressassignment.AddressAssignment
-	if err := store.Get(datastore.Get(), key, &assignment); err != nil {
-		return err
-	}
-
-	if err := store.Delete(datastore.Get(), key); err != nil {
-		return err
-	}
-
-	var svc service.Service
-	if err := this.GetService(assignment.ServiceID, &svc); err != nil {
-		glog.V(2).Infof("ControlPlaneDao.GetService service=%+v err=%s", assignment.ServiceID, err)
-		return err
-	}
-
-	if err := this.updateService(&svc); err != nil {
-		glog.V(2).Infof("ControlPlaneDao.updateService service=%+v err=%s", assignment.ServiceID, err)
-		return err
-	}
-
-	return nil
-}
-
-// AssignAddress Creates an AddressAssignment, verifies that an assignment for the service/endpoint does not already exist
-// id param contains id of newly created assignment if successful
-func (this *ControlPlaneDao) AssignAddress(assignment addressassignment.AddressAssignment, id *string) error {
-	err := assignment.ValidEntity()
-	if err != nil {
-		return err
-	}
-
-	switch assignment.AssignmentType {
-	case "static":
-		{
-			//check host and IP exist
-			if err = this.validStaticIp(assignment.HostID, assignment.IPAddr); err != nil {
-				return err
-			}
-		}
-	case "virtual":
-		{
-			// TODO: need to check if virtual IP exists
-			return fmt.Errorf("Not yet supported type %v", assignment.AssignmentType)
-		}
-	default:
-		//Validate above should handle this but left here for completenes
-		return fmt.Errorf("Invalid assignment type %v", assignment.AssignmentType)
-	}
-
-	//check service and endpoint exists
-	if err = this.validEndpoint(assignment.ServiceID, assignment.EndpointName); err != nil {
-		return err
-	}
-
-	//check for existing assignments to this endpoint
-	existing, err := this.getEndpointAddressAssignments(assignment.ServiceID, assignment.EndpointName)
-	if err != nil {
-		return err
-	}
-	if existing != nil {
-		return fmt.Errorf("Address Assignment already exists")
-	}
-	assignment.ID, err = dao.NewUuid()
-	if err != nil {
-		return err
-	}
-
-	store := addressassignment.NewStore()
-	if err = store.Put(datastore.Get(), addressassignment.Key(assignment.ID), &assignment); err != nil {
-		return err
-	}
-	*id = assignment.ID
-	return nil
-}
-
-func (this *ControlPlaneDao) validStaticIp(hostId string, ipAddr string) error {
-
-	host, err := this.facade.GetHost(datastore.Get(), hostId)
-	if err != nil {
-		return err
-	}
-	if host == nil {
-		return fmt.Errorf("host not found: %v", hostId)
-	}
-	found := false
-	for _, ip := range host.IPs {
-		if ip.IPAddress == ipAddr {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("Requested static IP is not available: %v", ipAddr)
-	}
-	return nil
-}
-
-func (this *ControlPlaneDao) validEndpoint(serviceId string, endpointName string) error {
-	store := service.NewStore()
-
-	svc := service.Service{}
-	err := store.Get(datastore.Get(), service.Key(serviceId), &svc)
-	if err != nil {
-		return err
-	}
-	found := false
-	for _, endpoint := range svc.Endpoints {
-		if endpointName == endpoint.Name {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("Endpoint %v not found on service %v", endpointName, serviceId)
-	}
-	return nil
-}
-
-// GetServiceAddressAssignments fills in all AddressAssignments for the specified serviced id.
-func (this *ControlPlaneDao) GetServiceAddressAssignments(serviceID string, assignments *[]*addressassignment.AddressAssignment) error {
-	store := addressassignment.NewStore()
-
-	results, err := store.GetServiceAddressAssignments(datastore.Get(), serviceID)
-	if err != nil {
-		return err
-	}
-	*assignments = results
-	return nil
-}
-
-// getEndpointAddressAssignments returns the AddressAssignment for the service and endpoint, if no assignments the AddressAssignment will be nil
-func (this *ControlPlaneDao) getEndpointAddressAssignments(serviceId string, endpointName string) (*addressassignment.AddressAssignment, error) {
-	//TODO: this can probably be done w/ a query
-	assignments := []*addressassignment.AddressAssignment{}
-	err := this.GetServiceAddressAssignments(serviceId, &assignments)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, result := range assignments {
-		if result.EndpointName == endpointName {
-			return result, nil
-		}
-	}
-	return nil, nil
-}
 
 func (this *ControlPlaneDao) GetServiceTemplates(unused int, templates *map[string]*servicetemplate.ServiceTemplate) error {
 	glog.V(2).Infof("ControlPlaneDao.GetServiceTemplates")
@@ -1528,36 +1115,6 @@ func NewControlPlaneDao(hostName string, port int, facade *facade.Facade, docker
 	}
 
 	return dao, nil
-}
-
-//createSystemUser updates the running instance password as well as the user record in elastic
-func createSystemUser(s *ControlPlaneDao) error {
-	user := dao.User{}
-	err := s.GetUser(SYSTEM_USER_NAME, &user)
-	if err != nil {
-		glog.Warningf("%s", err)
-		glog.V(0).Info("'default' user not found; creating...")
-
-		// create the system user
-		user := dao.User{}
-		user.Name = SYSTEM_USER_NAME
-		userName := SYSTEM_USER_NAME
-
-		if err := s.AddUser(user, &userName); err != nil {
-			return err
-		}
-	}
-
-	// update the instance password
-	password, err := dao.NewUuid()
-	if err != nil {
-		return err
-	}
-	user.Name = SYSTEM_USER_NAME
-	user.Password = password
-	INSTANCE_PASSWORD = password
-	unused := 0
-	return s.UpdateUser(user, &unused)
 }
 
 func NewControlSvc(hostName string, port int, facade *facade.Facade, zclient *coordclient.Client, varpath, vfs string, dockerRegistry string) (*ControlPlaneDao, error) {
