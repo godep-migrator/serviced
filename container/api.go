@@ -1,7 +1,12 @@
 package container
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"sync"
+	"syscall"
+	"time"
 
 	dockerclient "github.com/zenoss/go-dockerclient"
 )
@@ -13,8 +18,13 @@ const (
 
 type (
 	ContainerDefinition struct {
-		dockerclient.CreateContainerOptions
-		dockerclient.HostConfig
+		ContainerOptions dockerclient.CreateContainerOptions
+		HostConfig       dockerclient.HostConfig
+	}
+
+	handlerSet struct {
+		sync.Mutex
+		handlers []func(c *dockerclient.Container) error
 	}
 )
 
@@ -22,16 +32,27 @@ var (
 	ErrRequestTimeout = errors.New("request timed out")
 
 	dc dockerclient.Client
+	em dockerclient.EventMonitor
+
+	createHandlers = handlerSet{sync.Mutex{}, []func(c *dockerclient.Container) error{}}
+	startHandlers  = handlerSet{sync.Mutex{}, []func(c *dockerclient.Container) error{}}
 )
 
 func init() {
-	dc, err := dockerclient.NewClient(dockerep)
+	client, err := dockerclient.NewClient(dockerep)
 	if err != nil {
 		panic(fmt.Sprintf("can't create Docker client: %v", err))
 	}
+	dc = *client
+
+	monitor, err := dc.MonitorEvents()
+	if err != nil {
+		panic(fmt.Sprintf("can't monitor Docker events: %v", err))
+	}
+	em = monitor
 }
 
-func StartContainer(cd ContainerDefinition, timeout Duration) (string, error) {
+func StartContainer(cd *ContainerDefinition, timeout time.Duration) (string, error) {
 	ctr, err := dc.CreateContainer(cd.ContainerOptions)
 	switch {
 	case err == dockerclient.ErrNoSuchImage:
@@ -64,7 +85,7 @@ func StartContainer(cd ContainerDefinition, timeout Duration) (string, error) {
 		return nil
 	})
 
-	err = dc.StartContainer(ctr.ID, cd.HostConfig)
+	err = dc.StartContainer(ctr.ID, &cd.HostConfig)
 	if err != nil {
 		return emptystr, err
 	} else {
@@ -72,21 +93,46 @@ func StartContainer(cd ContainerDefinition, timeout Duration) (string, error) {
 		case <-time.After(timeout):
 			return emptystr, ErrRequestTimeout
 		case <-emc:
+			handleContainerStart(ctr)
 			return ctr.ID, nil
 		}
 	}
 }
 
-func StopContainer(id string, timeout Duration) error {
+func StopContainer(id string, timeout time.Duration) error {
 	return dc.StopContainer(id, uint(timeout))
 }
 
-func OnContainerStart(sf ContainerStartFunc) error {
+func OnContainerCreate(handler func(c *dockerclient.Container) error) error {
+	createHandlers.Lock()
+	defer createHandlers.Unlock()
+
+	createHandlers.handlers = append(createHandlers.handlers, handler)
 	return nil
 }
 
-func handleContainerCreation(id string) []error {
-	for _, handler := range containerCreationHandlers {
-		if handler.applies(cd
+func OnContainerStart(handler func(c *dockerclient.Container) error) error {
+	startHandlers.Lock()
+	defer startHandlers.Unlock()
+
+	startHandlers.handlers = append(startHandlers.handlers, handler)
+	return nil
 }
-<`0`>
+
+func handleContainerCreation(c *dockerclient.Container) {
+	createHandlers.Lock()
+	defer createHandlers.Unlock()
+
+	for _, handler := range createHandlers.handlers {
+		handler(c)
+	}
+}
+
+func handleContainerStart(c *dockerclient.Container) {
+	startHandlers.Lock()
+	defer startHandlers.Unlock()
+
+	for _, handler := range startHandlers.handlers {
+		handler(c)
+	}
+}

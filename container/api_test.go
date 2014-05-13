@@ -2,16 +2,17 @@ package container
 
 import (
 	"testing"
+	"time"
 
 	dockerclient "github.com/zenoss/go-dockerclient"
 )
 
 func TestOnStartContainer(t *testing.T) {
-	props := map[string]string{"Image": "base"}
 	var started bool
 
-	OnContainerStart(props, func() {
+	OnContainerStart(func(c *dockerclient.Container) error {
 		started = true
+		return nil
 	})
 
 	cd := &ContainerDefinition{
@@ -24,12 +25,12 @@ func TestOnStartContainer(t *testing.T) {
 		dockerclient.HostConfig{},
 	}
 
-	cid, err := StartContainer(cd)
+	cid, err := StartContainer(cd, 30*time.Second)
 	if err != nil {
 		t.Fatal("can't start container: ", err)
 	}
 
-	StopContainer(cid)
+	StopContainer(cid, 10*time.Second)
 
 	if !started {
 		t.Fatal("OnContainerStart handler was not triggered")
