@@ -103,7 +103,7 @@ func StopContainer(id string, timeout time.Duration) error {
 	return dc.StopContainer(id, uint(timeout))
 }
 
-func OnContainerCreate(handler func(c *dockerclient.Container) error) error {
+func OnContainerCreation(handler func(c *dockerclient.Container) error) error {
 	createHandlers.Lock()
 	defer createHandlers.Unlock()
 
