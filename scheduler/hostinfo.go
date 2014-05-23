@@ -6,44 +6,17 @@ import (
 	"sync"
 
 	"github.com/zenoss/glog"
-	"github.com/zenoss/serviced/coordinator/client"
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/domain/host"
 	"github.com/zenoss/serviced/domain/service"
-	zkservice "github.com/zenoss/serviced/zzk/service"
 )
 
 // HostInfo provides methods for getting host information from the dao or
 // otherwise. It's a separate interface for the sake of testing.
 type HostInfo interface {
 	AvailableRAM(*host.Host, chan *hostitem, <-chan bool)
+	PrioritizeByMemory([]*host.Host) ([]*host.Host, error)
 	ServicesOnHost(*host.Host) []*dao.RunningService
-}
-
-type ZKHostInfo struct {
-	conn client.Connection
-}
-
-func (hi *ZKHostInfo) AvailableRAM(host *host.Host, result chan *hostitem, done <-chan bool) {
-	rss, err := zkservice.LoadRunningServicesByHost(hi.conn, host.ID)
-	if err != nil {
-		glog.Errorf("cannot retrieve running services for host: %s (%v)", host.ID, err)
-		return // this host won't be scheduled
-	}
-
-	var totalRAM uint64
-	for _, rs := range rss {
-		totalRAM += rs.CommittedRAM
-	}
-
-	result <- &hostitem{host, host.Memory - cr, -1}
-}
-
-func (hi *ZKHostInfo) ServicesOnHost(host *host.Host) []*dao.RunningService {
-	if rss, err := zkservice.LoadRunningServicesByHost(hi.conn, host.ID); err != nil {
-		glog.Errorf("cannot retrieve running services for host: %s (%v)", h.ID, err)
-	}
-	return rss
 }
 
 type DAOHostInfo struct {
@@ -81,4 +54,46 @@ func (hi *DAOHostInfo) AvailableRAM(host *host.Host, result chan *hostitem, done
 	}
 
 	result <- &hostitem{host, host.Memory - cr, -1}
+}
+
+func (hi *DAOHostInfo) PrioritizeByMemory(hosts []*host.Host) ([]*host.Host, error) {
+	var wg sync.WaitGroup
+
+	result := make([]*host.Host, 0)
+	done := make(chan bool)
+	defer close(done)
+
+	hic := make(chan *hostitem)
+
+	// fan-out available RAM computation for each host
+	for _, h := range hosts {
+		wg.Add(1)
+		go func(host *host.Host) {
+			hi.AvailableRAM(host, hic, done)
+			wg.Done()
+		}(h)
+	}
+
+	// close the hostitem channel when all the calculation is finished
+	go func() {
+		wg.Wait()
+		close(hic)
+	}()
+
+	pq := &PriorityQueue{}
+	heap.Init(pq)
+
+	// fan-in all the available RAM computations
+	for hi := range hic {
+		heap.Push(pq, hi)
+	}
+
+	if pq.Len() < 1 {
+		return nil, errors.New("Unable to find a host to schedule")
+	}
+
+	for pq.Len() > 0 {
+		result = append(result, heap.Pop(pq).(*hostitem).host)
+	}
+	return result, nil
 }

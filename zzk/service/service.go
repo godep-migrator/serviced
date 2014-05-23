@@ -5,13 +5,9 @@ import (
 
 	"github.com/zenoss/glog"
 	"github.com/zenoss/serviced/coordinator/client"
-	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/domain/host"
 	"github.com/zenoss/serviced/domain/service"
 	"github.com/zenoss/serviced/domain/servicestate"
-	"github.com/zenoss/serviced/facade"
-	"github.com/zenoss/serviced/scheduler"
-	"github.com/zenoss/serviced/zzk"
 )
 
 const (
@@ -107,7 +103,7 @@ func ListenService(conn client.Connection, shutdown <-chan interface{}, done cha
 		case e := <-serviceEvent:
 			if e.Type == client.EventNodeDeleted {
 				glog.V(1).Infof("Shutting down due to node delete %s (%s)", svc.Name, svc.Id)
-				StopServiceInstances(conn, stateIDs...)
+				StopServiceInstances(conn, &svc, stateIDs...)
 				return
 			}
 			glog.V(2).Infof("Service %s (%s) receieved event: %v", svc.Name, svc.Id, e)
@@ -115,16 +111,16 @@ func ListenService(conn client.Connection, shutdown <-chan interface{}, done cha
 			glog.V(2).Infof("Service %s (%s) receieved state event: %v", svc.Name, svc.Id, e)
 		case <-shutdown:
 			glog.V(1).Infof("Service %s (%s) receieved signal to shutdown", svc.Name, svc.Id)
-			StopServiceInstances(conn, stateIDs...)
+			StopServiceInstances(conn, &svc, stateIDs...)
 			return
 		}
 	}
 }
 
 func StartServiceInstances(conn client.Connection, service *service.Service, hosts []*host.Host, instanceIDs ...int) {
-	hostPolicy := scheduler.NewZKServiceHostPolicy(service, conn)
+	policy := host.NewServiceHostPolicy(service, &ZKHostInfo{conn})
 	for _, i := range instanceIDs {
-		host, err := hostPolicy.SelectHost(hosts)
+		host, err := policy.Select(hosts)
 		if err != nil {
 			glog.Errorf("Error acquiring host policy for service %s: %s", service.Id, err)
 			return
@@ -136,7 +132,7 @@ func StartServiceInstances(conn client.Connection, service *service.Service, hos
 			return
 		}
 
-		state.HostIp = host.IPAddr
+		state.HostIP = host.IPAddr
 		state.InstanceID = i
 		if err := conn.Create(servicepath(state.ServiceID, state.Id), state); err != nil {
 			glog.Errorf("Could not add service instance %s: %s", state.Id, err)
@@ -153,10 +149,10 @@ func StartServiceInstances(conn client.Connection, service *service.Service, hos
 	}
 }
 
-func StopServiceInstances(conn client.Connection, service *service.Service, stateIDs ...string) {
-	for ssID := range stateIDs {
+func StopServiceInstances(conn client.Connection, svc *service.Service, stateIDs ...string) {
+	for _, ssID := range stateIDs {
 		var state servicestate.ServiceState
-		if err := conn.Get(servicepath(service.Id, ssID), &state); err != nil {
+		if err := conn.Get(servicepath(svc.Id, ssID), &state); err != nil {
 			glog.Errorf("Could not get service instance %s: %s", ssID, err)
 			return
 		}
@@ -179,8 +175,6 @@ func SyncServiceInstances(conn client.Connection, service *service.Service, stat
 	netInstances := service.Instances - len(stateIDs)
 
 	if netInstances > 0 {
-		glog.V(1).Infof("Starting up %d services for %s (%s)", netInstances, service.Name, service.Id)
-
 		// find the hosts
 		hosts, err := lh(service.PoolID)
 		if err != nil {
@@ -190,8 +184,13 @@ func SyncServiceInstances(conn client.Connection, service *service.Service, stat
 
 		// find the free instance ids
 		used := make(map[int]interface{})
-		for _, s := range states {
-			used[s.InstanceId] = nil
+		for _, ssID := range stateIDs {
+			var state servicestate.ServiceState
+			if err := conn.Get(servicepath(service.Id, ssID), &state); err != nil {
+				glog.Errorf("Could not get service state %s: %s", ssID, err)
+				return
+			}
+			used[state.InstanceID] = nil
 		}
 		var instanceIDs []int
 		for i := 0; len(instanceIDs) < netInstances; i++ {
@@ -200,6 +199,7 @@ func SyncServiceInstances(conn client.Connection, service *service.Service, stat
 			}
 		}
 
+		glog.V(1).Infof("Starting up %d services for %s (%s)", netInstances, service.Name, service.Id)
 		StartServiceInstances(conn, service, hosts, instanceIDs...)
 	} else if netInstances < 0 {
 		glog.V(1).Infof("Shutting down %d services for %s (%s)", netInstances, service.Name, service.Id)
