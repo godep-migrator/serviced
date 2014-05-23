@@ -59,6 +59,7 @@ type RunningService struct {
 	DesiredState    int
 	ParentServiceID string
 	InstanceID      int
+	RAMCommitment   uint64
 }
 
 // An instantiation of a Snapshot request

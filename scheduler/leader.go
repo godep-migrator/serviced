@@ -15,7 +15,8 @@ import (
 	"github.com/zenoss/serviced/domain/servicestate"
 	"github.com/zenoss/serviced/facade"
 	"github.com/zenoss/serviced/zzk"
-	"github.com/zenoss/serviced/zzk/snapshot"
+	zkservice "github.com/zenoss/serviced/zzk/service"
+	zksnapshot "github.com/zenoss/serviced/zzk/snapshot"
 )
 
 type leader struct {
@@ -51,238 +52,22 @@ func Lead(facade *facade.Facade, dao dao.ControlPlane, conn coordclient.Connecti
 				// passthru
 			}
 
-			// creates a listener for snapshots with a function call to take snapshots
-			// and return the label and error message
-			go snapshot.Listen(conn, func(serviceID string) (string, error) {
+			// creates a listener for snapshots with a function call to take
+			// snapshots and return the label and error message
+			go zksnapshot.Listen(conn, func(serviceID string) (string, error) {
 				var label string
 				err := dao.TakeSnapshot(serviceID, &label)
 				return label, err
 			})
 
-			leader.watchServices()
+			// creates a listener for services with a func call to find hosts
+			// within a pool
+			go zkservice.Listen(conn, func(poolID string) ([]*host.Hosts, error) {
+				return facade.FindHostsInPool(context, poolID)
+			})
+
 			return nil
 		}()
-	}
-}
-
-func snapShotName(volumeName string) string {
-	format := "20060102-150405"
-	loc := time.Now()
-	utc := loc.UTC()
-	return volumeName + "_" + utc.Format(format)
-}
-
-func (l *leader) watchServices() {
-	conn := l.conn
-	processing := make(map[string]chan int)
-	sDone := make(chan string)
-
-	// When this function exits, ensure that any started goroutines get
-	// a signal to shutdown
-	defer func() {
-		glog.V(0).Info("Leader shutting down child goroutines")
-		for key, shutdown := range processing {
-			glog.V(1).Info("Sending shutdown signal for ", key)
-			shutdown <- 1
-		}
-	}()
-
-	conn.CreateDir(zzk.SERVICE_PATH)
-	for {
-		glog.V(1).Info("Leader watching for changes to ", zzk.SERVICE_PATH)
-		serviceIds, zkEvent, err := conn.ChildrenW(zzk.SERVICE_PATH)
-		if err != nil {
-			glog.Errorf("Leader unable to find any services: %s", err)
-			return
-		}
-		for _, serviceID := range serviceIds {
-			if processing[serviceID] == nil {
-				glog.V(2).Info("Leader starting goroutine to watch ", serviceID)
-				serviceChannel := make(chan int)
-				processing[serviceID] = serviceChannel
-				go l.watchService(serviceChannel, sDone, serviceID)
-			}
-		}
-		select {
-		case evt := <-zkEvent:
-			glog.V(1).Info("Leader event: ", evt)
-		case serviceID := <-sDone:
-			glog.V(1).Info("Leading cleaning up for service ", serviceID)
-			delete(processing, serviceID)
-		}
-	}
-}
-
-func (l *leader) watchService(shutdown <-chan int, done chan<- string, serviceID string) {
-	conn := l.conn
-	defer func() {
-		glog.V(3).Info("Exiting function watchService ", serviceID)
-		done <- serviceID
-	}()
-	for {
-		var svc service.Service
-		zkEvent, err := zzk.LoadServiceW(conn, serviceID, &svc)
-		if err != nil {
-			glog.Errorf("Unable to load service %s: %v", serviceID, err)
-			return
-		}
-		_, childEvent, err := conn.ChildrenW(zzk.ServicePath(serviceID))
-
-		glog.V(1).Info("Leader watching for changes to service ", svc.Name)
-
-		switch exists, err := conn.Exists(path.Join("/services", serviceID)); {
-		case err != nil:
-			glog.Errorf("conn.Exists failed (%v)", err)
-			return
-		case exists == false:
-			glog.V(2).Infof("no /service node for: %s", serviceID)
-			return
-		}
-
-		// check current state
-		var serviceStates []*servicestate.ServiceState
-		err = zzk.GetServiceStates(l.conn, &serviceStates, serviceID)
-		if err != nil {
-			glog.Errorf("Unable to retrieve running service (%s) states: %v", serviceID, err)
-			return
-		}
-
-		// Is the service supposed to be running at all?
-		switch {
-		case svc.DesiredState == service.SVCStop:
-			shutdownServiceInstances(l.conn, serviceStates, len(serviceStates))
-		case svc.DesiredState == service.SVCRun:
-			l.updateServiceInstances(&svc, serviceStates)
-		default:
-			glog.Warningf("Unexpected desired state %d for service %s", svc.DesiredState, svc.Name)
-		}
-
-		select {
-		case evt := <-zkEvent:
-			if evt.Type == coordclient.EventNodeDeleted {
-				glog.V(0).Info("Shutting down due to node delete ", serviceID)
-				shutdownServiceInstances(l.conn, serviceStates, len(serviceStates))
-				return
-			}
-			glog.V(1).Infof("Service %s received event: %v", svc.Name, evt)
-			continue
-
-		case evt := <-childEvent:
-			glog.V(1).Infof("Service %s received child event: %v", svc.Name, evt)
-			continue
-
-		case <-shutdown:
-			glog.V(1).Info("Leader stopping watch on ", svc.Name)
-			return
-
-		}
-	}
-
-}
-
-func (l *leader) updateServiceInstances(service *service.Service, serviceStates []*servicestate.ServiceState) error {
-	//	var err error
-	// pick services instances to start
-	if len(serviceStates) < service.Instances {
-		instancesToStart := service.Instances - len(serviceStates)
-		glog.V(2).Infof("updateServiceInstances wants to start %d instances", instancesToStart)
-		hosts, err := l.facade.FindHostsInPool(l.context, service.PoolID)
-		if err != nil {
-			glog.Errorf("Leader unable to acquire hosts for pool %s: %v", service.PoolID, err)
-			return err
-		}
-		if len(hosts) == 0 {
-			glog.Warningf("Pool %s has no hosts", service.PoolID)
-			return nil
-		}
-
-		return l.startServiceInstances(service, hosts, instancesToStart)
-
-	} else if len(serviceStates) > service.Instances {
-		instancesToKill := len(serviceStates) - service.Instances
-		glog.V(2).Infof("updateServiceInstances wants to kill %d instances", instancesToKill)
-		shutdownServiceInstances(l.conn, serviceStates, instancesToKill)
-	}
-	return nil
-
-}
-
-// getFreeInstanceIDs looks up running instances of this service and returns n
-// unused instance ids.
-// Note: getFreeInstanceIDs does NOT validate that instance ids do not exceed
-// max number of instances for the service. We're already doing that check in
-// another, better place. It is guaranteed that either nil or n ids will be
-// returned.
-func getFreeInstanceIDs(conn coordclient.Connection, svc *service.Service, n int) ([]int, error) {
-	var (
-		states []*servicestate.ServiceState
-		ids    []int
-	)
-	// Look up existing instances
-	err := zzk.GetServiceStates(conn, &states, svc.Id)
-	if err != nil {
-		return nil, err
-	}
-	// Populate the used set
-	used := make(map[int]struct{})
-	for _, s := range states {
-		used[s.InstanceID] = struct{}{}
-	}
-	// Find n unused ids
-	for i := 0; len(ids) < n; i++ {
-		if _, ok := used[i]; !ok {
-			// Id is unused
-			ids = append(ids, i)
-		}
-	}
-	return ids, nil
-}
-func (l *leader) startServiceInstances(svc *service.Service, hosts []*host.Host, numToStart int) error {
-	glog.V(1).Infof("Starting %d instances, choosing from %d hosts", numToStart, len(hosts))
-
-	// Get numToStart free instance ids
-	freeids, err := getFreeInstanceIDs(l.conn, svc, numToStart)
-	if err != nil {
-		return err
-	}
-
-	hostPolicy := NewServiceHostPolicy(svc, l.dao)
-
-	// Start up an instance per id
-	for _, i := range freeids {
-		servicehost, err := hostPolicy.SelectHost(hosts)
-		if err != nil {
-			return err
-		}
-
-		glog.V(2).Info("Selected host ", servicehost)
-		serviceState, err := servicestate.BuildFromService(svc, servicehost.ID)
-		if err != nil {
-			glog.Errorf("Error creating ServiceState instance: %v", err)
-			return err
-		}
-
-		serviceState.HostIP = servicehost.IPAddr
-		serviceState.InstanceID = i
-		err = zzk.AddServiceState(l.conn, serviceState)
-		if err != nil {
-			glog.Errorf("Leader unable to add service state: %v", err)
-			return err
-		}
-		glog.V(2).Info("Started ", serviceState)
-	}
-	return nil
-}
-
-func shutdownServiceInstances(conn coordclient.Connection, serviceStates []*servicestate.ServiceState, numToKill int) {
-	glog.V(1).Infof("Stopping %d instances from %d total", numToKill, len(serviceStates))
-	for i := 0; i < numToKill; i++ {
-		glog.V(2).Infof("Killing host service state %s:%s\n", serviceStates[i].HostID, serviceStates[i].Id)
-		serviceStates[i].Terminated = time.Date(2, time.January, 1, 0, 0, 0, 0, time.UTC)
-		err := zzk.TerminateHostService(conn, serviceStates[i].HostID, serviceStates[i].Id)
-		if err != nil {
-			glog.Warningf("%s:%s wouldn't die", serviceStates[i].HostID, serviceStates[i].Id)
-		}
 	}
 }
 

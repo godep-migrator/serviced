@@ -3,6 +3,7 @@ package scheduler
 import (
 	"errors"
 
+	"github.com//zenoss/serviced/coordinator/client"
 	"github.com/zenoss/glog"
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/domain/host"
@@ -21,6 +22,10 @@ type ServiceHostPolicy struct {
 // ServiceHostPolicy returns a new ServiceHostPolicy.
 func NewServiceHostPolicy(s *service.Service, cp dao.ControlPlane) *ServiceHostPolicy {
 	return &ServiceHostPolicy{s, &DAOHostInfo{cp}}
+}
+
+func NewZKServiceHostPolicy(s *service.Service, conn client.Connection) *ServiceHostPolicy {
+	return &ServiceHostPolicy{s, &ZKHostInfo{conn}}
 }
 
 func (sp *ServiceHostPolicy) SelectHost(hosts []*host.Host) (*host.Host, error) {
@@ -59,7 +64,7 @@ func (sp *ServiceHostPolicy) leastCommittedHost(hosts []*host.Host) (*host.Host,
 		prioritized []*host.Host
 		err         error
 	)
-	if prioritized, err = sp.hinfo.PrioritizeByMemory(hosts); err != nil {
+	if prioritized, err = sp.prioritizeByMemory(hosts); err != nil {
 		return nil, err
 	}
 	return prioritized[0], nil
@@ -73,7 +78,7 @@ func (sp *ServiceHostPolicy) preferSeparateHosts(hosts []*host.Host) (*host.Host
 		prioritized []*host.Host
 		err         error
 	)
-	if prioritized, err = sp.hinfo.PrioritizeByMemory(hosts); err != nil {
+	if prioritized, err = sp.prioritizeByMemory(hosts); err != nil {
 		return nil, err
 	}
 	// First pass: find one that isn't running an instance of the service
@@ -95,7 +100,7 @@ func (sp *ServiceHostPolicy) requireSeparateHosts(hosts []*host.Host) (*host.Hos
 		prioritized []*host.Host
 		err         error
 	)
-	if prioritized, err = sp.hinfo.PrioritizeByMemory(hosts); err != nil {
+	if prioritized, err = sp.prioritizeByMemory(hosts); err != nil {
 		return nil, err
 	}
 	// First pass: find one that isn't running an instance of the service
@@ -104,4 +109,46 @@ func (sp *ServiceHostPolicy) requireSeparateHosts(hosts []*host.Host) (*host.Hos
 	}
 	// No second pass
 	return nil, errors.New("Unable to find a host to schedule")
+}
+
+func (sp *ServiceHostPolicy) prioritizeByMemory(hosts []*host.Host) ([]*host.Host, error) {
+	var wg sync.WaitGroup
+
+	result := make([]*host.Host, 0)
+	done := make(chan bool)
+	defer close(done)
+
+	hic := make(chan *hostitem)
+
+	// fan-out available RAM computation for each host
+	for _, h := range hosts {
+		wg.Add(1)
+		go func(host *host.Host) {
+			sp.hinfo.AvailableRAM(host, hic, done)
+			wg.Done()
+		}(h)
+	}
+
+	// close the hostitem channel when all the calculation is finished
+	go func() {
+		wg.Wait()
+		close(hic)
+	}()
+
+	pq := &PriorityQueue{}
+	heap.Init(pq)
+
+	// fan-in all the available RAM computations
+	for hi := range hic {
+		heap.Push(pq, hi)
+	}
+
+	if pq.Len() < 1 {
+		return nil, errors.New("Unable to find a host to schedule")
+	}
+
+	for pq.Len() > 0 {
+		result = append(result, heap.Pop(pq).(*hostitem).host)
+	}
+	return result, nil
 }

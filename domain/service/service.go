@@ -58,7 +58,11 @@ type Service struct {
 	Actions         map[string]string
 	HealthChecks    map[string]domain.HealthCheck // A health check for the service.
 	Prereqs         []domain.Prereq               // Optional list of scripts that must be successfully run before kicking off the service command.
+	version         interface{}
 }
+
+func (s *Service) Version() interface{}           { return s.version }
+func (s *Service) SetVersion(version interface{}) { s.version = version }
 
 //ServiceEndpoint endpoint exported or imported by a service
 type ServiceEndpoint struct {

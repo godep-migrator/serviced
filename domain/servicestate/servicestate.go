@@ -31,7 +31,11 @@ type ServiceState struct {
 	Endpoints   []service.ServiceEndpoint
 	HostIP      string
 	InstanceID  int
+	version     interface{}
 }
+
+func (ss *ServiceState) Version() interface{}           { return ss.version }
+func (ss *ServiceState) SetVersion(version interface{}) { ss.version = version }
 
 //A new service instance (ServiceState)
 func BuildFromService(service *service.Service, hostId string) (serviceState *ServiceState, err error) {
