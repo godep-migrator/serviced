@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"fmt"
-	"path"
 	"time"
 
 	"github.com/zenoss/glog"
@@ -12,9 +11,7 @@ import (
 	"github.com/zenoss/serviced/domain/addressassignment"
 	"github.com/zenoss/serviced/domain/host"
 	"github.com/zenoss/serviced/domain/service"
-	"github.com/zenoss/serviced/domain/servicestate"
 	"github.com/zenoss/serviced/facade"
-	"github.com/zenoss/serviced/zzk"
 	zkservice "github.com/zenoss/serviced/zzk/service"
 	zksnapshot "github.com/zenoss/serviced/zzk/snapshot"
 )
@@ -62,8 +59,8 @@ func Lead(facade *facade.Facade, dao dao.ControlPlane, conn coordclient.Connecti
 
 			// creates a listener for services with a func call to find hosts
 			// within a pool
-			go zkservice.Listen(conn, func(poolID string) ([]*host.Hosts, error) {
-				return facade.FindHostsInPool(context, poolID)
+			go zkservice.Listen(conn, func(poolID string) ([]*host.Host, error) {
+				return leader.facade.FindHostsInPool(leader.context, poolID)
 			})
 
 			return nil
