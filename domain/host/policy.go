@@ -17,6 +17,7 @@ type HostInfo interface {
 
 type HostPolicy interface {
 	Select(hosts []*Host) (*Host, error)
+	AvailableRAM(host *Host, result chan<- *hostitem)
 }
 
 type ServiceHostPolicy struct {
