@@ -12,8 +12,7 @@ import (
 )
 
 type HostInfo interface {
-	AvailableRAM(host *Host, item chan<- *Item)
-	ServicesOnHost(host *Host) []*dao.RunningService
+	ServicesOnHost(host *Host) ([]*dao.RunningService, error)
 }
 
 type HostPolicy interface {
@@ -43,10 +42,28 @@ func (sp *ServiceHostPolicy) Select(hosts []*Host) (*Host, error) {
 	}
 }
 
+func (sp *ServiceHostPolicy) AvailableRAM(host *Host, result chan<- *hostitem) {
+	rss, err := sp.hinfo.ServicesOnHost(host)
+	if err != nil {
+		// this host will not be scheduled
+		glog.Errorf("Cannot retrieve running services for host %s: %s", host.ID, err)
+		return
+	}
+
+	var totalRAM uint64
+	for _, rs := range rss {
+		totalRAM += rs.RAMCommitment
+	}
+	result <- &hostitem{host, host.Memory - totalRAM, -1}
+}
+
 func (sp *ServiceHostPolicy) firstFreeHost(svc *service.Service, hosts []*Host) *Host {
 hosts:
 	for _, h := range hosts {
-		rss := sp.hinfo.ServicesOnHost(h)
+		rss, _ := sp.hinfo.ServicesOnHost(h)
+		if rss == nil {
+			rss = make([]*dao.RunningService, 0)
+		}
 		for _, rs := range rss {
 			if rs.ServiceID == svc.Id {
 				// This host already has an instance of this service. Move on.
@@ -116,13 +133,13 @@ func (sp *ServiceHostPolicy) prioritizeByMemory(hosts []*Host) ([]*Host, error) 
 	var wg sync.WaitGroup
 
 	result := make([]*Host, 0)
-	hic := make(chan *Item)
+	hic := make(chan *hostitem)
 
 	// fan-out available RAM computation for each host
 	for _, h := range hosts {
 		wg.Add(1)
 		go func(host *Host) {
-			sp.hinfo.AvailableRAM(host, hic)
+			sp.AvailableRAM(host, hic)
 			wg.Done()
 		}(h)
 	}
@@ -146,7 +163,7 @@ func (sp *ServiceHostPolicy) prioritizeByMemory(hosts []*Host) ([]*Host, error) 
 	}
 
 	for pq.Len() > 0 {
-		result = append(result, heap.Pop(pq).(*Item).Host)
+		result = append(result, heap.Pop(pq).(*hostitem).host)
 	}
 	return result, nil
 }

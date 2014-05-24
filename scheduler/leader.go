@@ -51,21 +51,19 @@ func Lead(facade *facade.Facade, dao dao.ControlPlane, conn coordclient.Connecti
 
 			// creates a listener for snapshots with a function call to take
 			// snapshots and return the label and error message
-			go zksnapshot.Listen(conn, func(serviceID string) (string, error) {
-				var label string
-				err := dao.TakeSnapshot(serviceID, &label)
-				return label, err
-			})
+			go zksnapshot.NewListener(conn, dao).Listen()
 
 			// creates a listener for services with a func call to find hosts
 			// within a pool
-			go zkservice.Listen(conn, func(poolID string) ([]*host.Host, error) {
-				return leader.facade.FindHostsInPool(leader.context, poolID)
-			})
+			go zkservice.NewListener(conn, &leader).Listen()
 
 			return nil
 		}()
 	}
+}
+
+func (l *leader) LookupHosts(poolID string) ([]*host.Host, error) {
+	return l.facade.FindHostsInPool(l.context, poolID)
 }
 
 // selectPoolHostForService chooses a host from the pool for the specified service. If the service

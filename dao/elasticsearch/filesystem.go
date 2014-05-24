@@ -66,11 +66,11 @@ func (this *ControlPlaneDao) Snapshot(serviceID string, label *string) error {
 		ServiceID: serviceID,
 	}
 
-	if err := zkSnapshot.Send(conn, &req); err != nil {
+	listener := zkSnapshot.NewListener(conn, this)
+	if err := listener.Send(&req); err != nil {
 		return err
 	}
-
-	res, err := zkSnapshot.Recv(conn, serviceID)
+	res, err := listener.Recv(serviceID)
 	if err != nil {
 		return err
 	}
