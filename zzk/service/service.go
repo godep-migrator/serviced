@@ -20,16 +20,16 @@ func servicepath(nodes ...string) string {
 	return path.Join(p...)
 }
 
-type Handler interface {
+type ServiceHandler interface {
 	LookupHosts(poolID string) ([]*host.Host, error)
 }
 
 type ServiceListener struct {
 	conn    client.Connection
-	handler Handler
+	handler ServiceHandler
 }
 
-func NewListener(conn client.Connection, handler Handler) *ServiceListener {
+func NewServiceListener(conn client.Connection, handler ServiceHandler) *ServiceListener {
 	return &ServiceListener{conn, handler}
 }
 
@@ -46,7 +46,7 @@ func (l *ServiceListener) Listen() {
 	} else if exists {
 		// pass
 	} else if err := l.conn.CreateDir(servicepath()); err != nil {
-		glog.Error("Unabel to create service path on zookeeper: ", err)
+		glog.Error("Unable to create service path on zookeeper: ", err)
 		return
 	}
 
@@ -153,7 +153,9 @@ func (l *ServiceListener) startServiceInstances(svc *service.Service, hosts []*h
 
 		if err := l.conn.Create(hostpath(state.HostID, state.Id), NewHostState(state)); err != nil {
 			glog.Errorf("Could not add service instance %s: %s", state.Id, err)
-			l.conn.Delete(servicepath(state.ServiceID, state.Id))
+			if err := l.conn.Delete(servicepath(state.ServiceID, state.Id)); err != nil {
+				glog.Warningf("Could not remove service instance %s: %s", state.Id, err)
+			}
 			return
 		}
 

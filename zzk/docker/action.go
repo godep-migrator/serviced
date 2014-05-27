@@ -33,18 +33,29 @@ func (a *Action) Version() interface{} { return a.version }
 // SetVersion is an implementation of client.Node
 func (a *Action) SetVersion(version interface{}) { a.version = version }
 
-// ListenAction listens for new actions for a particular host
-func ListenAction(conn client.Connection, hostID string) {
+// ActionListener is the listener object for /docker/actions
+type ActionListener struct {
+	conn   client.Connection
+	hostID string
+}
+
+// NewActionListener instantiates a new action listener for /docker/actions
+func NewActionListener(conn client.Connection, hostID string) *ActionListener {
+	return &ActionListener{conn, hostID}
+}
+
+// Listen listens for new actions for a particular host
+func (l *ActionListener) Listen() {
 	// Make the path if it doesn't exist
-	node := actionPath(hostID)
-	if err := conn.CreateDir(node); err != nil {
+	node := actionPath(l.hostID)
+	if err := l.conn.CreateDir(node); err != nil {
 		glog.Errorf("Could not create path %s: %s", node, err)
 		return
 	}
 
 	// Wait for action commands
 	for {
-		nodes, event, err := conn.ChildrenW(node)
+		nodes, event, err := l.conn.ChildrenW(node)
 		if err != nil {
 			glog.Errorf("Could not listen for commands %s: %s", node, err)
 			return
@@ -52,9 +63,9 @@ func ListenAction(conn client.Connection, hostID string) {
 
 		for _, id := range nodes {
 			// Get the request
-			path := actionPath(hostID, id)
+			path := actionPath(l.hostID, id)
 			var action Action
-			if err := conn.Get(path, &action); err != nil {
+			if err := l.conn.Get(path, &action); err != nil {
 				glog.V(1).Infof("Could not get action at %s: %s", path, err)
 				continue
 			}
@@ -67,13 +78,13 @@ func ListenAction(conn client.Connection, hostID string) {
 			// do action
 			glog.V(1).Infof("Performing action to service state via request: %v", &action)
 			action.Started = true
-			if err := conn.Set(path, &action); err != nil {
+			if err := l.conn.Set(path, &action); err != nil {
 				glog.Warningf("Could not update command at %s", path, err)
 				continue
 			}
 
 			go func() {
-				defer conn.Delete(path)
+				defer l.conn.Delete(path)
 				result, err := utils.RunNSInitWithRetry(action.DockerID, action.Command)
 				if result != nil && len(result) > 0 {
 					glog.Info(string(result))
