@@ -110,6 +110,11 @@ func (l *HostListener) listenHostState(shutdown <-chan interface{}, done chan<- 
 		done <- ssID
 	}()
 
+	var (
+		attached bool
+		procDone <-chan interface{}
+	)
+
 	for {
 		var hs HostState
 		event, err := l.conn.GetW(hostpath(l.hostID, ssID), &hs)
@@ -142,21 +147,30 @@ func (l *HostListener) listenHostState(shutdown <-chan interface{}, done chan<- 
 		glog.V(2).Infof("Processing %s (%s); Desired State: %s", svc.Name, svc.Id, hs.DesiredState)
 		switch hs.DesiredState {
 		case service.SVCRun:
+			var err error
+
 			if state.Started.UnixNano() <= state.Terminated.UnixNano() {
-				l.startInstance(&svc, &state)
-			} else {
-				l.attachInstance(&state)
+				procDone, err = l.startInstance(&svc, &state)
+			} else if !attached {
+				procDone, err = l.attachInstance(&state)
 			}
+			if err != nil {
+				glog.Errorf("Error trying to start or attach to service instance %s: %s", state.Id, err)
+				l.stopInstance(&state)
+				return
+			}
+			attached = true
 		case service.SVCStop:
 			if state.Started.UnixNano() >= state.Terminated.UnixNano() {
 				if attached {
-					l.detachInstance(&state)
+					l.detachInstance(procDone, &state)
 				} else {
-
+					l.stopInstance(&state)
 				}
+				return
 			}
 		default:
-			// Unknown service state
+			glog.V(2).Infof("Unhandled service %s (%s)", svc.Name, svc.Id)
 		}
 
 		select {
@@ -175,42 +189,57 @@ func (l *HostListener) listenHostState(shutdown <-chan interface{}, done chan<- 
 	}
 }
 
-func (l *HostListener) startInstance(svc *service.Service, state *servicestate.ServiceState) {
+func (l *HostListener) setTerminated(done <-chan interface{}, state *servicestate.ServiceState) {
+	<-done
+	state.Terminated = time.Now()
+	if err := l.conn.Set(servicepath(state.ServiceID, state.Id), state); err != nil {
+		glog.Errorf("Could not update service instance %s as stopped: %s", state.Id, err)
+	}
+}
+
+func (l *HostListener) startInstance(svc *service.Service, state *servicestate.ServiceState) (<-chan interface{}, error) {
 	done := make(chan interface{})
 	if err := l.handler.Start(done, svc, state); err != nil {
-		glog.Errorf("Could not start service instance %s: %s", state.Id, err)
-		return
+		return nil, err
 	}
 	state.Started = time.Now()
 	if err := l.conn.Set(servicepath(state.ServiceID, state.Id), state); err != nil {
 		glog.Errorf("Could update service instance %s as started: %s", state.Id, err)
 	}
-	go func() {
-		<-done
-		state.Terminated = time.Now()
-		if err := l.conn.Set(servicepath(state.ServiceID, state.Id), state); err != nil {
-			glog.Errorf("Could not update service instance %s as stopped: %s", state.Id, err)
-		}
-	}()
+	go l.setTerminated(done, state)
+	return done, nil
 }
 
-func (l *HostListener) stopInstance(state *servicestate.ServiceState) {
-	if err := l.handler.Stop(state); err != nil {
-		glog.Errorf("Could not stop service instance %s: %s", state.Id, err)
-		return
+func (l *HostListener) attachInstance(state *servicestate.ServiceState) (<-chan interface{}, error) {
+	done := make(chan interface{})
+	if err := l.handler.Attach(done, state); err != nil {
+		return nil, err
 	}
+	go l.setTerminated(done, state)
+	return done, nil
+}
+
+func (l *HostListener) removeInstance(state *servicestate.ServiceState) error {
 	if err := l.conn.Delete(hostpath(state.HostID, state.Id)); err != nil {
-		glog.Errorf("Could not delete host instance %s: %s", state.Id, err)
-		return
+		return err
 	}
 	if err := l.conn.Delete(servicepath(state.ServiceID, state.Id)); err != nil {
-		glog.Errorf("Could not delete service instance %s: %s", state.Id, err)
-		return
+		return err
 	}
+	return nil
 }
 
-func (l *HostListener) attachInstance(hs *HostState) {
+func (l *HostListener) stopInstance(state *servicestate.ServiceState) error {
+	if err := l.handler.Stop(state); err != nil {
+		return err
+	}
+	return l.removeInstance(state)
 }
 
-// Stop the service
-// When done, delete node
+func (l *HostListener) detachInstance(done <-chan interface{}, state *servicestate.ServiceState) error {
+	if err := l.handler.Detach(state); err != nil {
+		return err
+	}
+	<-done
+	return l.removeInstance(state)
+}
