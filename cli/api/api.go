@@ -6,8 +6,9 @@ import (
 	"runtime/pprof"
 
 	"github.com/zenoss/glog"
-	docker "github.com/zenoss/go-dockerclient"
+	dockerclient "github.com/zenoss/go-dockerclient"
 	"github.com/zenoss/serviced"
+	"github.com/zenoss/serviced/commons"
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/rpc/agent"
 	"github.com/zenoss/serviced/rpc/master"
@@ -63,7 +64,7 @@ func LoadOptions(ops Options) {
 type api struct {
 	master *master.Client
 	agent  *agent.Client
-	docker *docker.Client
+	docker *dockerclient.Client
 	dao    dao.ControlPlane // Deprecated
 }
 
@@ -117,15 +118,19 @@ func (a *api) connectAgent(address string) (*agent.Client, error) {
 }
 
 // Opens a connection to docker if not already connected
-func (a *api) connectDocker() (*docker.Client, error) {
+func (a *api) connectDocker() (*dockerclient.Client, error) {
 	if a.docker == nil {
-		const DOCKER_ENDPOINT string = "unix:///var/run/docker.sock"
+		const DockerEndpoint string = "unix:///var/run/docker.sock"
 		var err error
-		if a.docker, err = docker.NewClient(DOCKER_ENDPOINT); err != nil {
+		if a.docker, err = dockerclient.NewClient(DockerEndpoint); err != nil {
 			return nil, fmt.Errorf("could not create a client to docker: %s", err)
 		}
 	}
 	return a.docker, nil
+}
+
+func (a *api) connectDockerRegistry() (commons.DockerRegistry, error) {
+	return commons.NewDockerRegistry(options.DockerRegistry)
 }
 
 // DEPRECATED: Opens a connection to the DAO if not already connected

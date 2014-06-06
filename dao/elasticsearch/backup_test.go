@@ -5,13 +5,6 @@
 package elasticsearch
 
 import (
-	"github.com/zenoss/serviced/dao"
-	"github.com/zenoss/serviced/domain"
-	"github.com/zenoss/serviced/domain/service"
-	"github.com/zenoss/serviced/domain/servicedefinition"
-	"github.com/zenoss/serviced/domain/servicetemplate"
-	. "gopkg.in/check.v1"
-
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -21,6 +14,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	dockerclient "github.com/zenoss/go-dockerclient"
+	"github.com/zenoss/serviced/commons"
+	"github.com/zenoss/serviced/dao"
+	"github.com/zenoss/serviced/domain"
+	"github.com/zenoss/serviced/domain/service"
+	"github.com/zenoss/serviced/domain/servicedefinition"
+	"github.com/zenoss/serviced/domain/servicetemplate"
+	. "gopkg.in/check.v1"
 )
 
 type log interface {
@@ -28,7 +30,6 @@ type log interface {
 }
 
 func TestBackup_writeDirectoryToAndFromTgz(t *testing.T) {
-	t.Skip("TODO: fix this test")
 	//FIXME: Should also test that files are restored with the original owner
 	// and permissions, even if the UID/GID is not a UID/GID on this system.
 
@@ -81,7 +82,6 @@ func TestBackup_writeDirectoryToAndFromTgz(t *testing.T) {
 }
 
 func TestBackup_writeAndReadJsonToAndFromFile(t *testing.T) {
-	t.Skip("TODO: fix this test")
 	original := make(map[string][]int)
 	original["a"] = []int{0, 1, 2}
 	original["b"] = []int{3, 4, 5}
@@ -95,7 +95,7 @@ func TestBackup_writeAndReadJsonToAndFromFile(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	tempFile := filepath.Join(tempDir, "data.json")
-	if e := writeJsonToFile(original, tempFile); e != nil {
+	if e := writeJSONToFile(original, tempFile); e != nil {
 		t.Fatalf("Failed to write data %+v to file %s: %s", original, tempFile, e)
 	}
 
@@ -112,7 +112,7 @@ func TestBackup_writeAndReadJsonToAndFromFile(t *testing.T) {
 	}
 
 	var retrieved map[string][]int
-	if e := readJsonFromFile(&retrieved, tempFile); e != nil {
+	if e := readJSONFromFile(&retrieved, tempFile); e != nil {
 		t.Fatalf("Failed to read data from file %s: %s", tempFile, e)
 	}
 
@@ -211,7 +211,7 @@ func all_docker_images(t log) (map[string]bool, error) {
 }
 
 func get_docker_image_tags(t log, imageId string) (map[string]bool, error) {
-	client, e := newDockerExporter()
+	client, e := dockerclient.NewClient(DOCKER_ENDPOINT)
 	if e != nil {
 		t.Log("Failure getting docker client")
 		return nil, e
@@ -234,7 +234,7 @@ func get_docker_image_tags(t log, imageId string) (map[string]bool, error) {
 }
 
 func (dt *DaoTest) TestBackup_IntegrationTest(t *C) {
-	t.Skip("TODO: fix this test")
+	t.Skip("TODO: Fix this broken test. Maybe a race condition?")
 	var (
 		unused         int
 		request        dao.EntityRequest
@@ -283,7 +283,7 @@ func (dt *DaoTest) TestBackup_IntegrationTest(t *C) {
 		Name:    "test",
 		Command: "echo",
 		ImageID: imageId,
-		Launch:  "MANUAL",
+		Launch:  commons.MANUAL,
 		Volumes: []servicedefinition.Volume{template_volume},
 	}
 
@@ -299,8 +299,9 @@ func (dt *DaoTest) TestBackup_IntegrationTest(t *C) {
 		Name:           "test_service",
 		Startup:        "echo",
 		Instances:      0,
-		InstanceLimits: domain.MinMax{0, 0},
+		InstanceLimits: domain.MinMax{Min: 0, Max: 0},
 		ImageID:        imageId,
+		Launch:         commons.MANUAL,
 		PoolID:         "default",
 		DesiredState:   0,
 		Volumes:        []servicedefinition.Volume{template_volume},

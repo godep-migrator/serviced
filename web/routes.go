@@ -17,7 +17,11 @@ func (sc *ServiceConfig) getRoutes() []rest.Route {
 		rest.Route{"GET", "/test", testPage},
 		rest.Route{"GET", "/stats", sc.isCollectingStats()},
 		rest.Route{"GET", "/version", sc.authorizedClient(restGetServicedVersion)},
-
+		rest.Route{"GET", "/backup/create", sc.authorizedClient(RestBackupCreate)},
+		rest.Route{"GET", "/backup/restore", sc.authorizedClient(RestBackupRestore)},
+		rest.Route{"GET", "/backup/list", sc.checkAuth(RestBackupFileList)},
+		rest.Route{"GET", "/backup/status", sc.authorizedClient(RestBackupStatus)},
+		rest.Route{"GET", "/backup/restore/status", sc.authorizedClient(RestRestoreStatus)},
 		// Hosts
 		rest.Route{"GET", "/hosts", sc.checkAuth(restGetHosts)},
 		rest.Route{"GET", "/hosts/:hostId", sc.checkAuth(restGetHost)},
@@ -36,8 +40,8 @@ func (sc *ServiceConfig) getRoutes() []rest.Route {
 		rest.Route{"GET", "/pools/:poolId/hosts", sc.checkAuth(restGetHostsForResourcePool)},
 
 		// Pools (VirtualIP)
-		rest.Route{"PUT", "/pools/:poolId/virtualip", sc.authorizedClient(restAddPoolVirtualIP)},
-		rest.Route{"DELETE", "/pools/:poolId/virtualip/*id", sc.authorizedClient(restRemovePoolVirtualIP)},
+		rest.Route{"PUT", "/pools/:poolId/virtualip", sc.checkAuth(restAddPoolVirtualIP)},
+		rest.Route{"DELETE", "/pools/:poolId/virtualip/*ip", sc.checkAuth(restRemovePoolVirtualIP)},
 
 		// Pools (IPs)
 		rest.Route{"GET", "/pools/:poolId/ips", sc.checkAuth(restGetPoolIps)},

@@ -34,10 +34,12 @@ type ServiceDefinition struct {
 	LogConfigs    []LogConfig
 	Snapshot      SnapshotCommands              // Snapshot quiesce info for the service: Pause/Resume bash commands
 	RAMCommitment uint64                        // expected RAM commitment to use for scheduling
+	CPUCommitment uint64                        // expected CPU commitment (#cores) to use for scheduling
 	Runs          map[string]string             // Map of commands that can be executed with 'serviced run ...'
 	Actions       map[string]string             // Map of commands that can be executed with 'serviced action ...'
 	HealthChecks  map[string]domain.HealthCheck // HealthChecks for a service.
 	Prereqs       []domain.Prereq               // Optional list of scripts that must be successfully run before kicking off the service command.
+	Metrics       []MetricGroup                 // An optional list of querable metrics
 }
 
 // SnapshotCommands commands to be called during and after a snapshot
@@ -103,6 +105,20 @@ type LogConfig struct {
 type LogTag struct {
 	Name  string
 	Value string
+}
+
+// MetricGroup defines a group of metrics
+type MetricGroup struct {
+	ID          string
+	Name        string
+	Description string
+	Metrics     []Metric
+}
+
+// Metric defines a single metric in a group
+type Metric struct {
+	ID   string
+	Name string
 }
 
 // HostPolicy represents the optional policy used to determine which hosts on

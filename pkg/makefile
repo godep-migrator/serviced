@@ -50,7 +50,7 @@ pkgroot:
 # Build serviced binary
 build:
 	mkdir -p build/tmp
-	cd ../ && make build_binary export
+	cd ../ && make build_binary
 
 # Stage serviced files
 stage: build pkgroot
@@ -100,12 +100,14 @@ stage_rpm: stage
 	cp serviced.service pkgroot/usr/lib/systemd/system
 
 # Make a DEB
+# net-tools provides ifconfig, needed for VIPs
 deb: stage_deb
 	fpm \
 		-n $(NAME) \
 		-v $(PKG_VERSION) \
 		-s dir \
 		-d nfs-kernel-server \
+		-d net-tools \
 		-d nfs-common \
 		-d 'lxc-docker >= 0.11.1' \
 		-t deb \
@@ -115,6 +117,7 @@ deb: stage_deb
 		--description "$$DESCRIPTION" \
 		--deb-user root \
 		--deb-group root \
+		--deb-recommends 'docker-smuggle >= 2.24' \
 		.
 #		-d "supervisor" \
 
