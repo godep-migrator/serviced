@@ -173,6 +173,9 @@ func Sync(conn client.Connection, vips []pool.VirtualIP) error {
 		if err := conn.Get(vpath, &node); err != nil {
 			return err
 		}
+		if node.Delete {
+			continue
+		}
 		node.Delete = true
 		if err := conn.Set(vpath, &node); err != nil {
 			return err
