@@ -41,10 +41,9 @@ func (hs *HostState) Version() interface{}           { return hs.version }
 func (hs *HostState) SetVersion(version interface{}) { hs.version = version }
 
 type HostHandler interface {
-	Start(chan<- interface{}, *service.Service, *servicestate.ServiceState) error
-	Stop(*servicestate.ServiceState) error
-	Attach(chan<- interface{}, *servicestate.ServiceState) error
-	Detach(*servicestate.ServiceState) error
+	StartService(chan<- interface{}, *service.Service, *servicestate.ServiceState) (string, error)
+	StopService(*servicestate.ServiceState) error
+	AttachService(chan<- interface{}, *servicestate.ServiceState) error
 }
 
 type HostListener struct {
@@ -199,9 +198,12 @@ func (l *HostListener) setTerminated(done <-chan interface{}, state *servicestat
 
 func (l *HostListener) startInstance(svc *service.Service, state *servicestate.ServiceState) (<-chan interface{}, error) {
 	done := make(chan interface{})
-	if err := l.handler.Start(done, svc, state); err != nil {
+	dockerID, err := l.handler.StartService(done, svc, state)
+	if err != nil {
 		return nil, err
 	}
+	state.Id = dockerID
+	state.DockerID = dockerID
 	state.Started = time.Now()
 	if err := l.conn.Set(servicepath(state.ServiceID, state.Id), state); err != nil {
 		glog.Errorf("Could update service instance %s as started: %s", state.Id, err)
@@ -212,7 +214,7 @@ func (l *HostListener) startInstance(svc *service.Service, state *servicestate.S
 
 func (l *HostListener) attachInstance(state *servicestate.ServiceState) (<-chan interface{}, error) {
 	done := make(chan interface{})
-	if err := l.handler.Attach(done, state); err != nil {
+	if err := l.handler.AttachService(done, state); err != nil {
 		return nil, err
 	}
 	go l.setTerminated(done, state)
@@ -230,14 +232,14 @@ func (l *HostListener) removeInstance(state *servicestate.ServiceState) error {
 }
 
 func (l *HostListener) stopInstance(state *servicestate.ServiceState) error {
-	if err := l.handler.Stop(state); err != nil {
+	if err := l.handler.StopService(state); err != nil {
 		return err
 	}
 	return l.removeInstance(state)
 }
 
 func (l *HostListener) detachInstance(done <-chan interface{}, state *servicestate.ServiceState) error {
-	if err := l.handler.Detach(state); err != nil {
+	if err := l.handler.StopService(state); err != nil {
 		return err
 	}
 	<-done

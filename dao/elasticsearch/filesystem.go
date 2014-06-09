@@ -65,11 +65,11 @@ func (this *ControlPlaneDao) Snapshot(serviceID string, label *string) error {
 		ServiceID: serviceID,
 	}
 
-	if err := zkSnapshot.Send(conn, &req); err != nil {
+	if err := zkSnapshot.SendSnapshot(conn, &req); err != nil {
 		glog.Errorf("ControlPlaneDao.Snapshot err=%s", err)
 		return err
 	}
-	res, err := listener.Recv(serviceID)
+	res, err := zkSnapshot.WaitSnapshot(conn, serviceID)
 	if err != nil {
 		glog.Errorf("ControlPlaneDao.Snapshot err=%s", err)
 		return err

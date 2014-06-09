@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"fmt"
-	"path"
 	"time"
 
 	"github.com/zenoss/glog"
@@ -12,7 +11,6 @@ import (
 	"github.com/zenoss/serviced/domain/addressassignment"
 	"github.com/zenoss/serviced/domain/host"
 	"github.com/zenoss/serviced/domain/service"
-	"github.com/zenoss/serviced/domain/servicestate"
 	"github.com/zenoss/serviced/facade"
 	zkService "github.com/zenoss/serviced/zzk/service"
 	zkSnapshot "github.com/zenoss/serviced/zzk/snapshot"
@@ -33,7 +31,6 @@ type leader struct {
 func Lead(facade *facade.Facade, dao dao.ControlPlane, conn coordclient.Connection, zkEvent <-chan coordclient.Event) {
 	glog.V(0).Info("Entering Lead()!")
 	defer glog.V(0).Info("Exiting Lead()!")
-	shutdownmode := false
 
 	allPools, err := facade.GetResourcePools(datastore.Get())
 	if err != nil {
@@ -53,7 +50,7 @@ func Lead(facade *facade.Facade, dao dao.ControlPlane, conn coordclient.Connecti
 			continue
 		}
 
-		leader.init(poolID, zkEvent)
+		leader.init(aPool.ID, zkEvent)
 	}
 }
 
@@ -74,14 +71,33 @@ func (l *leader) init(poolID string, zkEvent <-chan coordclient.Event) {
 		// start the snapshot listener
 		go zkSnapshot.NewSnapshotListener(l.conn, l).Listen()
 
-		// start the virtual ip listener
-		go zkVirtualIP.NewVIPListener(l.conn, l).Listen()
-
 		// start virtual ip synchronization
 		go l.syncVirtualIPs(poolID)
 
 		// start the service listener
 		zkService.NewServiceListener(l.conn, l).Listen()
+	}
+}
+
+func (l *leader) syncVirtualIPs(poolID string) {
+	// TODO: currently just checking the pool every 10 seconds.  Maybe change
+	// this to use a zookeeper listener instead?
+	for {
+		select {
+		case <-time.After(10 * time.Second):
+			pool, err := l.facade.GetResourcePool(l.context, poolID)
+			if err != nil {
+				glog.Errorf("Could not load resource pool %s: %s", poolID, err)
+				return
+			} else if pool == nil {
+				glog.Errorf("Pool %s not found", poolID)
+				return
+			}
+
+			if err := zkVirtualIP.Sync(l.conn, pool.VirtualIPs); err != nil {
+				glog.Errorf("Could not sync virtual IP for pool %s: %s", poolID, err)
+			}
+		}
 	}
 }
 
@@ -91,11 +107,11 @@ func (l *leader) TakeSnapshot(serviceID string) (string, error) {
 	return label, err
 }
 
-func (l *leader) FindHostsInPool(poolID string) ([]host.Host, error) {
+func (l *leader) FindHostsInPool(poolID string) ([]*host.Host, error) {
 	return l.facade.FindHostsInPool(l.context, poolID)
 }
 
-func (l *leader) SelectHost(svc *service.Service, hosts []*host.Host, policy *host.HostPolicy) (*host.Host, error) {
+func (l *leader) SelectHost(svc *service.Service, hosts []*host.Host, policy host.HostPolicy) (*host.Host, error) {
 	var (
 		assignmentType string
 		ipAddr         string
@@ -106,7 +122,7 @@ func (l *leader) SelectHost(svc *service.Service, hosts []*host.Host, policy *ho
 		if endpoint.AddressAssignment != (addressassignment.AddressAssignment{}) {
 			assignmentType = endpoint.AddressAssignment.AssignmentType
 			ipAddr = endpoint.AddressAssignment.IPAddr
-			hostId = endpoint.AddressAssignment.HostID
+			hostID = endpoint.AddressAssignment.HostID
 			break
 		}
 	}
@@ -114,8 +130,8 @@ func (l *leader) SelectHost(svc *service.Service, hosts []*host.Host, policy *ho
 	if assignmentType == addressassignment.Virtual {
 		// populate hostid
 		var err error
-		if hostID, err = zkvirtualIP.GetHost(ipaddr); err != nil {
-			return nil, error
+		if hostID, err = zkVirtualIP.GetHost(l.conn, ipAddr); err != nil {
+			return nil, err
 		}
 	}
 	if hostID != "" {
@@ -128,33 +144,4 @@ func (l *leader) SelectHost(svc *service.Service, hosts []*host.Host, policy *ho
 	}
 
 	return policy.Select(hosts)
-}
-
-func (l *leader) BindVirtualIP(vip *pool.VirtualIP, index int) (string, error) {
-	// check if the ip exists
-	if vmap, err := mapVirtualIPs(); err != nil {
-		return "", err
-	} else if _, ok := vmap[vip.IP]; ok {
-		return "", fmt.Errorf("requested virtual ip already on this host")
-	}
-
-	viname := vip.BindInterface + viPrefix + strconv.Itoa(index)
-	if err := bind(vip, viname); err != nil {
-		return "", err
-	}
-
-	return utils.HostID()
-}
-
-func (l *leader) UnbindVirtualIP(vip *pool.VirtualIP) error {
-	// verify the address lives on this host
-	if vmap, err := mapVirtualIPs(); err != nil {
-		return err
-	} else if _, ok := vmap[vip.IP]; !ok {
-		glog.Warningf("Virtual IP %s not found on this host", vip.IP)
-		return nil
-	} else if err := unbind(vip.InterfaceName); err != nil {
-		return err
-	}
-	return nil
 }

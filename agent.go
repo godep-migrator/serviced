@@ -16,6 +16,7 @@ import (
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/datastore"
 	"github.com/zenoss/serviced/domain"
+	"github.com/zenoss/serviced/domain/pool"
 	"github.com/zenoss/serviced/domain/service"
 	"github.com/zenoss/serviced/domain/servicestate"
 	"github.com/zenoss/serviced/domain/user"
@@ -895,7 +896,7 @@ func (a *HostAgent) start() {
 			defer conn.Close()
 
 			// watch virtual IP zookeeper nodes
-			go virtualips.WatchVirtualIPs(conn)
+			go virtualips.NewVIPListener(conn, a).Listen()
 
 			return a.processChildrenAndWait(conn)
 		}()
@@ -903,6 +904,35 @@ func (a *HostAgent) start() {
 			break
 		}
 	}
+}
+
+func (agent *HostAgent) BindVirtualIP(vip *pool.VirtualIP, index int) (string, error) {
+	// check if the ip exists
+	if vmap, err := mapVirtualIPs(); err != nil {
+		return "", err
+	} else if _, ok := vmap[vip.IP]; ok {
+		return "", fmt.Errorf("requested virtual ip already on this host")
+	}
+
+	viname := vip.BindInterface + viPrefix + strconv.Itoa(index)
+	if err := bind(vip, viname); err != nil {
+		return "", err
+	}
+
+	return utils.HostID()
+}
+
+func (agent *HostAgent) UnbindVirtualIP(vip *pool.VirtualIP) error {
+	// verify the address lives on this host
+	if vmap, err := mapVirtualIPs(); err != nil {
+		return err
+	} else if _, ok := vmap[vip.IP]; !ok {
+		glog.Warningf("Virtual IP %s not found on this host", vip.IP)
+		return nil
+	} else if err := unbind(vip.InterfaceName); err != nil {
+		return err
+	}
+	return nil
 }
 
 type stateResult struct {

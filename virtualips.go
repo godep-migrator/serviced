@@ -1,9 +1,8 @@
-package scheduler
+package serviced
 
 import (
 	"fmt"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"github.com/zenoss/glog"
@@ -13,28 +12,6 @@ import (
 const (
 	viPrefix = ":zvip"
 )
-
-func (l *leader) syncVirtualIPs(poolID string) {
-	// TODO: currently just checking the pool every 10 seconds.  Maybe change
-	// this to use a zookeeper listener instead?
-	for {
-		select {
-		case <-time.After(10 * time.Second):
-			pool, err := l.facade.GetResourcePool(l.context, poolID)
-			if err != nil {
-				glog.Errorf("Could not load resource pool %s: %s", poolID, err)
-				return
-			} else if pool == nil {
-				glog.Errorf("Pool %s not found", poolID)
-				return
-			}
-
-			if err := zkVirtualIP.Sync(l.conn, pool.VirtualIPs); err != nil {
-				glog.Errorf("Could not sync virtual IP for pool %s: %s", poolID, err)
-			}
-		}
-	}
-}
 
 func bind(vip *pool.VirtualIP, name string) error {
 	if err := exec.Command("ifconfig", name, "inet", vip.IP, "netmask", vip.Netmask).Run(); err != nil {
@@ -52,8 +29,8 @@ func unbind(name string) error {
 	return nil
 }
 
-func mapVirtualIPs() (map[string]pool.VirtualIP, error) {
-	vmap := make(map[string]pool.VirtualIP)
+func mapVirtualIPs() (map[string]*pool.VirtualIP, error) {
+	vmap := make(map[string]*pool.VirtualIP)
 
 	for _, viname := range getVirtualInterfaceNames() {
 		vip, err := lookupVirtualIP(viname)
@@ -74,10 +51,10 @@ func getVirtualInterfaceNames() (names []string) {
 		glog.Warningf("Could not get virtual interface names: %s", out)
 		return
 	}
-	return strings.Fields(out)
+	return strings.Fields(string(out))
 }
 
-func lookupVirtualIP(name string) (pool.VirtualIP, error) {
+func lookupVirtualIP(name string) (*pool.VirtualIP, error) {
 	bindInterfaceAndIndex := strings.Split(name, viPrefix)
 	if len(bindInterfaceAndIndex) != 2 {
 		return nil, fmt.Errorf("unexpected interface format")
@@ -93,8 +70,8 @@ func lookupVirtualIP(name string) (pool.VirtualIP, error) {
 		return nil, fmt.Errorf("virtual ip not found: %s", out)
 	}
 
-	return pool.VirtualIP{
-		IP:            strings.TrimSpace(out),
+	return &pool.VirtualIP{
+		IP:            strings.TrimSpace(string(out)),
 		BindInterface: bindInterface,
 		InterfaceName: name,
 	}, nil

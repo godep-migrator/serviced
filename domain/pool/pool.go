@@ -17,6 +17,7 @@ type VirtualIP struct {
 	IP            string
 	Netmask       string
 	BindInterface string
+	InterfaceName string
 }
 
 // ResourcePool A collection of computing resources with optional quotas.
