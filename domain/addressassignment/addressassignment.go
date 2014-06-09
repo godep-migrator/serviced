@@ -4,6 +4,8 @@
 
 package addressassignment
 
+const Virtual = "virtual"
+
 //AddressAssignment is used to track Ports that have been assigned to a Service.
 type AddressAssignment struct {
 	ID             string //Generated id

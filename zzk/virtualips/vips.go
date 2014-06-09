@@ -32,7 +32,7 @@ func (node *vipnode) Version() interface{}           { return node.version }
 func (node *vipnode) SetVersion(version interface{}) { node.version = version }
 
 type VIPHandler interface {
-	BindVirtualIP(vip *pool.VirtualIP) (string, error)
+	BindVirtualIP(vip *pool.VirtualIP, index int) (string, error)
 	UnbindVirtualIP(vip *pool.VirtualIP) error
 }
 
@@ -67,6 +67,7 @@ func (listener *VIPListener) Listen() {
 		processing = make(map[string]interface{})
 	)
 
+	vipIndex := 0
 	for {
 		vips, event, err := listener.conn.ChildrenW(vippath())
 		if err != nil {
@@ -78,7 +79,8 @@ func (listener *VIPListener) Listen() {
 			if _, ok := processing[ip]; !ok {
 				glog.V(1).Info("Spawning a listener for IP ", ip)
 				processing[ip] = nil
-				go listener.listenVIP(shutdown, done, ip)
+				go listener.listenVIP(shutdown, done, ip, vipIndex)
+				vipIndex++
 			}
 		}
 
@@ -92,7 +94,7 @@ func (listener *VIPListener) Listen() {
 	}
 }
 
-func (listener *VIPListener) listenVIP(shutdown <-chan interface{}, done chan<- string, ip string) {
+func (listener *VIPListener) listenVIP(shutdown <-chan interface{}, done chan<- string, ip string, index int) {
 	defer func() {
 		glog.V(2).Info("Shutting down listener for virtual IP ", ip)
 		done <- ip
@@ -114,7 +116,7 @@ func (listener *VIPListener) listenVIP(shutdown <-chan interface{}, done chan<- 
 
 		// Check if the node needs to be created
 		if node.HostID == "" {
-			if err := listener.bind(&node); err != nil {
+			if err := listener.bind(&node, index); err != nil {
 				glog.Errorf("Could not bind virtual ip %s: %s", ip, err)
 				return
 			}
@@ -138,9 +140,9 @@ func (listener *VIPListener) unbind(node *vipnode) {
 	}
 }
 
-func (listener *VIPListener) bind(node *vipnode) error {
+func (listener *VIPListener) bind(node *vipnode, index int) error {
 	var err error
-	node.HostID, err = listener.handler.BindVirtualIP(&node.VirtualIP)
+	node.HostID, err = listener.handler.BindVirtualIP(&node.VirtualIP, index)
 	if err != nil {
 		listener.unbind(node)
 		return err
@@ -190,4 +192,12 @@ func Sync(conn client.Connection, vips []pool.VirtualIP) error {
 	}
 
 	return nil
+}
+
+func GetHost(conn client.Connection, ip string) (string, error) {
+	var node vipnode
+	if err := conn.Get(vippath(ip), &node); err != nil {
+		return "", err
+	}
+	return node.HostID, nil
 }

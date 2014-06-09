@@ -21,7 +21,8 @@ func servicepath(nodes ...string) string {
 }
 
 type ServiceHandler interface {
-	LookupHosts(poolID string) ([]*host.Host, error)
+	FindHostsInPool(poolID string) ([]*host.Host, error)
+	SelectHost(service *service.Service, hosts []*host.Host, policy host.HostPolicy) (*host.Host, error)
 }
 
 type ServiceListener struct {
@@ -132,7 +133,7 @@ func (l *ServiceListener) listenService(shutdown <-chan interface{}, done chan<-
 func (l *ServiceListener) startServiceInstances(svc *service.Service, hosts []*host.Host, instanceIDs []int) {
 	policy := host.NewServiceHostPolicy(svc, l)
 	for _, i := range instanceIDs {
-		host, err := policy.Select(hosts)
+		host, err := l.handler.SelectHost(svc, hosts, policy)
 		if err != nil {
 			glog.Errorf("Error acquiring host policy for service %s: %s", svc.Id, err)
 			return
@@ -190,7 +191,7 @@ func (l *ServiceListener) syncServiceInstances(svc *service.Service, stateIDs []
 
 	if netInstances > 0 {
 		// find the hosts
-		hosts, err := l.handler.LookupHosts(svc.PoolID)
+		hosts, err := l.handler.FindHostsInPool(svc.PoolID)
 		if err != nil {
 			glog.Errorf("Could not lookup hosts for service %s (%s) with pool ID %s: %s", svc.Name, svc.Id, svc.PoolID, err)
 			return

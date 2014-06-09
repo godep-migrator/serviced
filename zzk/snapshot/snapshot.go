@@ -34,7 +34,7 @@ func (s *Snapshot) SetVersion(version interface{}) { s.version = version }
 func (s *Snapshot) done() bool { return s.Label != "" || s.Error != nil }
 
 type SnapshotHandler interface {
-	TakeSnapshot(serviceID string, label *string) error
+	TakeSnapshot(serviceID string) (string, error)
 }
 
 type SnapshotListener struct {
@@ -42,7 +42,7 @@ type SnapshotListener struct {
 	handler SnapshotHandler
 }
 
-func NewListener(conn client.Connection, handler SnapshotHandler) *SnapshotListener {
+func NewSnapshotListener(conn client.Connection, handler SnapshotHandler) *SnapshotListener {
 	return &SnapshotListener{conn, handler}
 }
 
@@ -83,7 +83,7 @@ func (l *SnapshotListener) Listen() {
 
 			// Do snapshot
 			glog.V(1).Infof("Taking snapshot for request: %v", snapshot)
-			snapshot.Error = l.handler.TakeSnapshot(snapshot.ServiceID, &snapshot.Label)
+			snapshot.Label, snapshot.Error = l.handler.TakeSnapshot(snapshot.ServiceID)
 			if snapshot.Error != nil {
 				glog.V(1).Infof("Snapshot failed for request: %v", snapshot)
 			}
