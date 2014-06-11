@@ -36,6 +36,15 @@ func GetLabel(name string) string {
 	return fmt.Sprintf("%s_%s", name, utc.Format(TIMEFMT))
 }
 
+func getExitCode(err error) (int, error) {
+	if exiterr, ok := err.(*exec.ExitError); ok {
+		if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+			return status.ExitStatus(), nil
+		}
+	}
+	return 0, err
+}
+
 // validOwnerSpec returns true if the owner is specified in owner:group format and the
 // identifiers are valid POSIX.1-2008 username and group strings, respectively.
 func validOwnerSpec(owner string) bool {

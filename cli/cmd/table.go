@@ -109,6 +109,7 @@ func (tbl *table) dedent() {
 // formattree formats the tree for printing
 func (tbl *table) formattree(tree map[string][]string, root string, getrow func(string) []interface{}) {
 	tmap := treemap(tree)
+	tmap.sort()
 
 	var next func(string)
 	next = func(root string) {

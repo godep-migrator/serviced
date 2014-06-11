@@ -41,9 +41,10 @@ func (hs *HostState) Version() interface{}           { return hs.version }
 func (hs *HostState) SetVersion(version interface{}) { hs.version = version }
 
 type HostHandler interface {
-	StartService(chan<- interface{}, *service.Service, *servicestate.ServiceState) (string, error)
+	AttachService(chan<- interface{}, *service.Service, *servicestate.ServiceState) error
+	StartService(chan<- interface{}, *service.Service, *servicestate.ServiceState) error
 	StopService(*servicestate.ServiceState) error
-	AttachService(chan<- interface{}, *servicestate.ServiceState) error
+	CheckInstance(*servicestate.ServiceState) error
 }
 
 type HostListener struct {
@@ -51,6 +52,15 @@ type HostListener struct {
 	shutdown <-chan interface{}
 	conn     client.Connection
 	handler  HostHandler
+}
+
+func NewHostListener(shutdown <-chan interface{}, conn client.Connection, handler HostHandler, hostID string) *HostListener {
+	return &HostListener{
+		shutdown: shutdown,
+		conn:     conn,
+		handler:  handler,
+		hostID:   hostID,
+	}
 }
 
 func (l *HostListener) Listen() {
@@ -151,7 +161,7 @@ func (l *HostListener) listenHostState(shutdown <-chan interface{}, done chan<- 
 			if state.Started.UnixNano() <= state.Terminated.UnixNano() {
 				procDone, err = l.startInstance(&svc, &state)
 			} else if !attached {
-				procDone, err = l.attachInstance(&state)
+				procDone, err = l.attachInstance(&svc, &state)
 			}
 			if err != nil {
 				glog.Errorf("Error trying to start or attach to service instance %s: %s", state.Id, err)
@@ -173,6 +183,8 @@ func (l *HostListener) listenHostState(shutdown <-chan interface{}, done chan<- 
 		}
 
 		select {
+		case <-procDone:
+			glog.V(2).Info("Process ended for instance ", hs.ID)
 		case e := <-event:
 			glog.V(3).Infof("Receieved event: %v", e)
 			switch e.Type {
@@ -188,36 +200,43 @@ func (l *HostListener) listenHostState(shutdown <-chan interface{}, done chan<- 
 	}
 }
 
-func (l *HostListener) setTerminated(done <-chan interface{}, state *servicestate.ServiceState) {
-	<-done
-	state.Terminated = time.Now()
-	if err := l.conn.Set(servicepath(state.ServiceID, state.Id), state); err != nil {
-		glog.Errorf("Could not update service instance %s as stopped: %s", state.Id, err)
+func (l *HostListener) pingInstance(done <-chan interface{}, interval time.Duration, state *servicestate.ServiceState) {
+	statepath := servicepath(state.ServiceID, state.Id)
+	wait := time.After(time.Second)
+	for {
+		select {
+		case <-wait:
+			if err := l.handler.CheckInstance(state); err != nil {
+				glog.V(2).Infof("Could not look up instance %s: %s", state.Id, err)
+			} else if l.conn.Set(statepath, state); err != nil {
+				glog.V(2).Infof("Could not update instance %s: %s", state.Id, err)
+			}
+			wait = time.After(interval * time.Second)
+		case <-done:
+			state.Terminated = time.Now()
+			if err := l.conn.Set(statepath, state); err != nil {
+				glog.V(2).Infof("Could not update instance %s as stopped: %s", state.Id, err)
+			}
+			return
+		}
 	}
 }
 
 func (l *HostListener) startInstance(svc *service.Service, state *servicestate.ServiceState) (<-chan interface{}, error) {
 	done := make(chan interface{})
-	dockerID, err := l.handler.StartService(done, svc, state)
-	if err != nil {
+	if err := l.handler.StartService(done, svc, state); err != nil {
 		return nil, err
 	}
-	state.Id = dockerID
-	state.DockerID = dockerID
-	state.Started = time.Now()
-	if err := l.conn.Set(servicepath(state.ServiceID, state.Id), state); err != nil {
-		glog.Errorf("Could update service instance %s as started: %s", state.Id, err)
-	}
-	go l.setTerminated(done, state)
+	go l.pingInstance(done, 5, state)
 	return done, nil
 }
 
-func (l *HostListener) attachInstance(state *servicestate.ServiceState) (<-chan interface{}, error) {
+func (l *HostListener) attachInstance(svc *service.Service, state *servicestate.ServiceState) (<-chan interface{}, error) {
 	done := make(chan interface{})
-	if err := l.handler.AttachService(done, state); err != nil {
+	if err := l.handler.AttachService(done, svc, state); err != nil {
 		return nil, err
 	}
-	go l.setTerminated(done, state)
+	go l.pingInstance(done, 5, state)
 	return done, nil
 }
 
