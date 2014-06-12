@@ -33,15 +33,21 @@ func (a *Action) Version() interface{} { return a.version }
 // SetVersion is an implementation of client.Node
 func (a *Action) SetVersion(version interface{}) { a.version = version }
 
+type ActionHandler interface {
+	AttachAndRun(dockerID string, command []string) ([]byte, error)
+}
+
 // ActionListener is the listener object for /docker/actions
 type ActionListener struct {
-	conn   client.Connection
-	hostID string
+	shutdown <-chan interface{}
+	conn     client.Connection
+	handler  ActionHandler
+	hostID   string
 }
 
 // NewActionListener instantiates a new action listener for /docker/actions
-func NewActionListener(conn client.Connection, hostID string) *ActionListener {
-	return &ActionListener{conn, hostID}
+func NewActionListener(shutdown <-chan interface{}, conn client.Connection, handler ActionHandler, hostID string) *ActionListener {
+	return &ActionListener{shutdown, conn, handler, hostID}
 }
 
 // Listen listens for new actions for a particular host
@@ -85,7 +91,7 @@ func (l *ActionListener) Listen() {
 
 			go func() {
 				defer l.conn.Delete(path)
-				result, err := utils.AttachAndRun(action.DockerID, action.Command)
+				result, err := l.handler.AttachAndRun(action.DockerID, action.Command)
 				if result != nil && len(result) > 0 {
 					glog.Info(string(result))
 				}
@@ -98,7 +104,12 @@ func (l *ActionListener) Listen() {
 		}
 
 		// wait for an event that something changed
-		<-event
+		select {
+		case e := <-event:
+			glog.V(2).Infof("Receieved docker action event: %v", e)
+		case <-l.shutdown:
+			return
+		}
 	}
 }
 

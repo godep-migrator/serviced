@@ -32,17 +32,19 @@ func (node *vipnode) Version() interface{}           { return node.version }
 func (node *vipnode) SetVersion(version interface{}) { node.version = version }
 
 type VIPHandler interface {
-	BindVirtualIP(vip *pool.VirtualIP, index int) (string, error)
+	BindVirtualIP(vip *pool.VirtualIP, index int) error
 	UnbindVirtualIP(vip *pool.VirtualIP) error
 }
 
 type VIPListener struct {
-	conn    client.Connection
-	handler VIPHandler
+	shutdown <-chan interface{}
+	conn     client.Connection
+	handler  VIPHandler
+	hostID   string
 }
 
-func NewVIPListener(conn client.Connection, handler VIPHandler) *VIPListener {
-	return &VIPListener{conn, handler}
+func NewVIPListener(shutdown <-chan interface{}, conn client.Connection, handler VIPHandler, hostID string) *VIPListener {
+	return &VIPListener{shutdown, conn, handler, hostID}
 }
 
 func (listener *VIPListener) Listen() {
@@ -90,6 +92,8 @@ func (listener *VIPListener) Listen() {
 		case ip := <-done:
 			glog.V(2).Info("Cleaning up virtual IP ", ip)
 			delete(processing, ip)
+		case <-shutdown:
+			return
 		}
 	}
 }
@@ -141,15 +145,12 @@ func (listener *VIPListener) unbind(node *vipnode) {
 }
 
 func (listener *VIPListener) bind(node *vipnode, index int) error {
-	var err error
-	node.HostID, err = listener.handler.BindVirtualIP(&node.VirtualIP, index)
-	if err != nil {
+	if err := listener.handler.BindVirtualIP(&node.VirtualIP, index); err != nil {
 		listener.unbind(node)
 		return err
-	} else if err := listener.conn.Set(vippath(node.VirtualIP.IP), node); err != nil {
-		return err
 	}
-	return nil
+	node.HostID = listener.hostID
+	return listener.conn.Set(vippath(node.VirtualIP.IP), node)
 }
 
 func Sync(conn client.Connection, vips []pool.VirtualIP) error {
