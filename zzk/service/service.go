@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"path"
 
 	"github.com/zenoss/glog"
@@ -171,19 +172,10 @@ func (l *ServiceListener) stopServiceInstances(svc *service.Service, stateIDs []
 	for _, ssID := range stateIDs {
 		var state servicestate.ServiceState
 		if err := l.conn.Get(servicepath(svc.Id, ssID), &state); err != nil {
-			glog.Errorf("Could not get service instance %s: %s", ssID, err)
+			glog.Errorf("Could retrieve service instance %s: %s", ssID, err)
 			return
 		}
-
-		var hs HostState
-		if err := l.conn.Get(hostpath(state.HostID, ssID), &hs); err != nil {
-			glog.Errorf("Could not get service instance %s via host %s: %s", state.Id, state.HostID, err)
-			return
-		}
-
-		glog.V(2).Infof("Stopping service instance %s via host %s", state.Id, state.HostID)
-		hs.DesiredState = service.SVCStop
-		if err := l.conn.Set(hostpath(state.HostID, hs.ID), &hs); err != nil {
+		if err := StopServiceInstance(l.conn, state.HostID, state.Id); err != nil {
 			glog.Warningf("Service instance %s won't die", state.Id)
 		}
 	}
@@ -227,4 +219,25 @@ func (l *ServiceListener) syncServiceInstances(svc *service.Service, stateIDs []
 
 func (l *ServiceListener) ServicesOnHost(host *host.Host) ([]*dao.RunningService, error) {
 	return LoadRunningServicesByHost(l.conn, host.ID)
+}
+
+func UpdateService(conn client.Connection, svc *service.Service) error {
+	if svc.Id == "" {
+		return fmt.Errorf("service id required")
+	}
+	spath := servicepath(svc.Id)
+	if exists, err := conn.Exists(spath); err != nil {
+		return err
+	} else if !exists {
+		return conn.Create(spath, svc)
+	}
+
+	return conn.Set(spath, svc)
+}
+
+func RemoveService(conn client.Connection, id string) error {
+	if id == "" {
+		return fmt.Errorf("service id required")
+	}
+	return conn.Delete(servicepath(id))
 }

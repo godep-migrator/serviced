@@ -4,7 +4,6 @@ import (
 	"github.com/zenoss/serviced/domain"
 	"github.com/zenoss/serviced/domain/addressassignment"
 	"github.com/zenoss/serviced/domain/service"
-	"github.com/zenoss/serviced/domain/servicestate"
 	"github.com/zenoss/serviced/domain/servicetemplate"
 	"github.com/zenoss/serviced/domain/user"
 	"github.com/zenoss/serviced/volume"
@@ -93,17 +92,8 @@ type ControlPlane interface {
 	// Stop a running instance of a service
 	StopRunningInstance(request HostServiceRequest, unused *int) error
 
-	// Update the service state
-	UpdateServiceState(state servicestate.ServiceState, unused *int) error
-
-	// Get the services instances for a given service
-	GetServiceStates(serviceId string, states *[]*servicestate.ServiceState) error
-
 	// Get logs for the given app
 	GetServiceLogs(serviceId string, logs *string) error
-
-	// Get logs for the given app
-	GetServiceStateLogs(request ServiceStateRequest, logs *string) error
 
 	// Get all running services
 	GetRunningServices(request EntityRequest, runningServices *[]*RunningService) error

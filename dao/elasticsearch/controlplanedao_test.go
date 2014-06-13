@@ -33,7 +33,6 @@ import (
 	_ "github.com/zenoss/serviced/volume"
 	_ "github.com/zenoss/serviced/volume/btrfs"
 	_ "github.com/zenoss/serviced/volume/rsync"
-	"github.com/zenoss/serviced/zzk"
 	. "gopkg.in/check.v1"
 )
 

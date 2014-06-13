@@ -7,26 +7,6 @@ import (
 	"github.com/zenoss/serviced/domain/servicestate"
 )
 
-func NewRunningService(service *service.Service, state *servicestate.ServiceState) *dao.RunningService {
-	return &dao.RunningService{
-		Id:              state.Id,
-		ServiceID:       state.ServiceID,
-		StartedAt:       state.Started,
-		HostID:          state.HostID,
-		DockerID:        state.DockerID,
-		InstanceID:      state.InstanceID,
-		Startup:         service.Startup,
-		Name:            service.Name,
-		Description:     service.Description,
-		Instances:       service.Instances,
-		PoolID:          service.PoolID,
-		ImageID:         service.ImageID,
-		DesiredState:    service.DesiredState,
-		ParentServiceID: service.ParentServiceID,
-		RAMCommitment:   service.RAMCommitment,
-	}
-}
-
 func LoadRunningService(conn client.Connection, serviceID, ssID string) (*dao.RunningService, error) {
 	var service service.Service
 	if err := conn.Get(servicepath(serviceID), &service); err != nil {
@@ -38,7 +18,7 @@ func LoadRunningService(conn client.Connection, serviceID, ssID string) (*dao.Ru
 		return nil, err
 	}
 
-	return NewRunningService(&service, &state), nil
+	return dao.NewRunningService(&service, &state), nil
 }
 
 func LoadRunningServicesByHost(conn client.Connection, hostIDs ...string) ([]*dao.RunningService, error) {

@@ -3,8 +3,10 @@ package dao
 import (
 	"time"
 
-	"github.com/zenoss/serviced/utils"
+	"github.com/zenoss/serviced/domain/service"
 	"github.com/zenoss/serviced/domain/servicedefinition"
+	"github.com/zenoss/serviced/domain/servicestate"
+	"github.com/zenoss/serviced/utils"
 )
 
 type User struct {
@@ -47,12 +49,14 @@ type ServiceTemplateDeploymentRequest struct {
 // A request to deploy a service from a service definition
 //  Pool and deployment ids are derived from the parent
 type ServiceDeploymentRequest struct {
-	ParentID     string	// ID of parent service
-	Service      servicedefinition.ServiceDefinition;
+	ParentID string // ID of parent service
+	Service  servicedefinition.ServiceDefinition
 }
 
 // This is created by selecting from service_state and joining to service
 type RunningService struct {
+	service         *service.Service
+	state           *servicestate.ServiceState
 	Id              string
 	ServiceID       string
 	HostID          string
@@ -68,6 +72,36 @@ type RunningService struct {
 	ParentServiceID string
 	InstanceID      int
 	RAMCommitment   uint64
+}
+
+func NewRunningService(service *service.Service, state *servicestate.ServiceState) *RunningService {
+	return &RunningService{
+		state:           state,
+		Id:              state.Id,
+		ServiceID:       state.ServiceID,
+		StartedAt:       state.Started,
+		HostID:          state.HostID,
+		DockerID:        state.DockerID,
+		InstanceID:      state.InstanceID,
+		service:         service,
+		Startup:         service.Startup,
+		Name:            service.Name,
+		Description:     service.Description,
+		Instances:       service.Instances,
+		PoolID:          service.PoolID,
+		ImageID:         service.ImageID,
+		DesiredState:    service.DesiredState,
+		ParentServiceID: service.ParentServiceID,
+		RAMCommitment:   service.RAMCommitment,
+	}
+}
+
+func (rs *RunningService) GetService() *service.Service {
+	return rs.service
+}
+
+func (rs *RunningService) GetServiceState() *servicestate.ServiceState {
+	return rs.state
 }
 
 // An instantiation of a Snapshot request

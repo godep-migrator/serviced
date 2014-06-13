@@ -37,8 +37,6 @@ import (
 	// Need to do rsync driver initializations
 	_ "github.com/zenoss/serviced/volume/rsync"
 	"github.com/zenoss/serviced/web"
-	"github.com/zenoss/serviced/zzk"
-	zkdocker "github.com/zenoss/serviced/zzk/docker"
 
 	"crypto/tls"
 	"errors"
@@ -65,7 +63,6 @@ type daemon struct {
 	hostID         string
 	zclient        *coordclient.Client
 	storageHandler *storage.Server
-	zkDAO          *zzk.ZkDao
 }
 
 func newDaemon(staticIPs []string) (*daemon, error) {
@@ -123,7 +120,13 @@ func (d *daemon) run() error {
 		statsdest := fmt.Sprintf("http://%s/api/metrics/store", options.HostStats)
 		statsduration := time.Duration(options.StatsPeriod) * time.Second
 		glog.V(1).Infoln("Staring container statistics reporter")
-		statsReporter, err := stats.NewStatsReporter(statsdest, statsduration, d.zkDAO)
+		conn, err := d.zclient.GetConnection()
+		if err != nil {
+			glog.Errorf("Error retrieving zookeeper connection: %s", err)
+			return err
+		}
+		defer conn.Close()
+		statsReporter, err := stats.NewStatsReporter(conn, statsdest, statsduration)
 		if err != nil {
 			glog.Errorf("Error kicking off stats reporter %v", err)
 		} else {
@@ -162,7 +165,6 @@ func (d *daemon) startMaster() error {
 		return err
 	}
 
-	d.zkDAO = d.initZKDAO(d.zclient)
 	d.facade = d.initFacade()
 
 	if d.cpDao, err = d.initDAO(); err != nil {
@@ -258,7 +260,8 @@ func (d *daemon) startAgent() (hostAgent *serviced.HostAgent, err error) {
 	if err != nil {
 		return nil, err
 	}
-	mux, err := proxy.NewTCPMux(muxListener)
+	// mux, err := proxy.NewTCPMux(muxListener)
+	_, err = proxy.NewTCPMux(muxListener)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +284,7 @@ func (d *daemon) startAgent() (hostAgent *serviced.HostAgent, err error) {
 	}
 	nfsClient.Wait()
 
-	hostAgent, err = serviced.NewHostAgent(options.Endpoint, options.UIPort, options.DockerDNS, options.VarPath, options.Mount, options.VFS, options.Zookeepers, mux, options.DockerRegistry)
+	hostAgent, err = serviced.NewHostAgent(options.Endpoint, options.UIPort, options.DockerRegistry, options.VarPath, options.VFS, options.Mount, options.DockerDNS, options.Zookeepers)
 	if err != nil {
 		glog.Fatalf("Could not start ControlPlane agent: %v", err)
 	}
@@ -295,19 +298,12 @@ func (d *daemon) startAgent() (hostAgent *serviced.HostAgent, err error) {
 		glog.Fatalf("could not register Agent RPC server: %v", err)
 	}
 
-	d.startAgentListeners()
-
 	go func() {
 		signalChan := make(chan os.Signal, 10)
 		signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 		<-signalChan
 		glog.V(0).Info("Shutting down due to interrupt")
-		err = hostAgent.Shutdown()
-		if err != nil {
-			glog.V(1).Infof("Agent shutdown with error: %v", err)
-		} else {
-			glog.Info("Agent shutdown")
-		}
+		hostAgent.Shutdown()
 		isvcs.Mgr.Stop()
 		os.Exit(0)
 	}()
@@ -320,23 +316,6 @@ func (d *daemon) startAgent() (hostAgent *serviced.HostAgent, err error) {
 	}()
 
 	return hostAgent, nil
-}
-
-func (d *daemon) startAgentListeners() {
-	// start agent listeners
-	var err error
-	if d.zclient == nil {
-		d.zclient, err = d.initZK()
-		if err != nil {
-			glog.Fatal("could not initialize zk client: ", err)
-		}
-	}
-	zconn, err := d.zclient.GetConnection()
-	if err != nil {
-		glog.Fatal("could not connect to zk: ", err)
-	}
-
-	go zkdocker.NewActionListener(zconn, d.hostID).Listen()
 }
 
 func (d *daemon) registerMasterRPC() error {
@@ -375,7 +354,7 @@ func (d *daemon) initDriver() (datastore.Driver, error) {
 }
 
 func (d *daemon) initFacade() *facade.Facade {
-	f := facade.New(d.zkDAO, options.DockerRegistry)
+	f := facade.New(d.zclient, options.DockerRegistry)
 	return f
 }
 
@@ -390,12 +369,8 @@ func (d *daemon) initZK() (*coordclient.Client, error) {
 	return zclient, err
 }
 
-func (d *daemon) initZKDAO(zkClient *coordclient.Client) *zzk.ZkDao {
-	return zzk.NewZkDao(zkClient)
-}
-
 func (d *daemon) initDAO() (dao.ControlPlane, error) {
-	return elasticsearch.NewControlSvc("localhost", 9200, d.facade, d.zclient, options.VarPath, options.VFS, options.DockerRegistry, d.zkDAO)
+	return elasticsearch.NewControlSvc("localhost", 9200, d.facade, d.zclient, options.VarPath, options.VFS, options.DockerRegistry)
 }
 
 func (d *daemon) initWeb() {

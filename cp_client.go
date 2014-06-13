@@ -17,7 +17,6 @@ import (
 	"github.com/zenoss/serviced/domain"
 	"github.com/zenoss/serviced/domain/addressassignment"
 	"github.com/zenoss/serviced/domain/service"
-	"github.com/zenoss/serviced/domain/servicestate"
 	"github.com/zenoss/serviced/domain/servicetemplate"
 	"github.com/zenoss/serviced/domain/user"
 	"github.com/zenoss/serviced/volume"
@@ -115,16 +114,8 @@ func (s *ControlClient) GetRunningServices(request dao.EntityRequest, runningSer
 	return s.rpcClient.Call("ControlPlane.GetRunningServices", request, runningServices)
 }
 
-func (s *ControlClient) GetServiceState(request dao.ServiceStateRequest, state *servicestate.ServiceState) error {
-	return s.rpcClient.Call("ControlPlane.GetServiceState", request, state)
-}
-
 func (s *ControlClient) GetRunningService(request dao.ServiceStateRequest, running *dao.RunningService) error {
 	return s.rpcClient.Call("ControlPlane.GetRunningService", request, running)
-}
-
-func (s *ControlClient) GetServiceStates(serviceId string, states *[]*servicestate.ServiceState) (err error) {
-	return s.rpcClient.Call("ControlPlane.GetServiceStates", serviceId, states)
 }
 
 func (s *ControlClient) StartService(serviceId string, hostId *string) (err error) {
@@ -137,10 +128,6 @@ func (s *ControlClient) RestartService(serviceId string, unused *int) (err error
 
 func (s *ControlClient) StopService(serviceId string, unused *int) (err error) {
 	return s.rpcClient.Call("ControlPlane.StopService", serviceId, unused)
-}
-
-func (s *ControlClient) UpdateServiceState(state servicestate.ServiceState, unused *int) (err error) {
-	return s.rpcClient.Call("ControlPlane.UpdateServiceState", state, unused)
 }
 
 func (s *ControlClient) DeployTemplate(request dao.ServiceTemplateDeploymentRequest, tenantId *string) error {

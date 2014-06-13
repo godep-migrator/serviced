@@ -8,7 +8,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/zenoss/glog"
 	"github.com/zenoss/serviced/dao"
-	"github.com/zenoss/serviced/domain/service"
 	"github.com/zenoss/serviced/domain/servicestate"
 
 	"crypto/tls"
@@ -73,28 +72,13 @@ func (sc *ServiceConfig) vhostFinder() error {
 	}
 	defer client.Close()
 
-	services := []*dao.RunningService{}
-	client.GetRunningServices(&empty, &services)
-
+	rss := []*dao.RunningService{}
+	client.GetRunningServices(&empty, &rss)
 	vhosts := make(map[string][]*servicestate.ServiceState, 0)
-
-	for _, s := range services {
-		var svc service.Service
-
-		if err := client.GetService(s.ServiceID, &svc); err != nil {
-			glog.Errorf("Can't get service: %s (%v)", s.Id, err)
-		}
-
-		svcstates := []*servicestate.ServiceState{}
-		if err := client.GetServiceStates(s.ServiceID, &svcstates); err != nil {
-			glog.Warningf("can't retrieve service states for %s (%v)", s.ServiceID, err)
-		}
-
-		for _, vhep := range svc.GetServiceVHosts() {
+	for _, rs := range rss {
+		for _, vhep := range rs.GetService().GetServiceVHosts() {
 			for _, vh := range vhep.VHosts {
-				for _, ss := range svcstates {
-					vhosts[vh] = append(vhosts[vh], ss)
-				}
+				vhosts[vh] = append(vhosts[vh], rs.GetServiceState())
 			}
 		}
 	}

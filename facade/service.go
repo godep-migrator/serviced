@@ -7,13 +7,13 @@ package facade
 import (
 	"github.com/zenoss/glog"
 	"github.com/zenoss/serviced/commons"
+	coordclient "github.com/zenoss/serviced/coordinator/client"
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/datastore"
 	"github.com/zenoss/serviced/domain/addressassignment"
 	"github.com/zenoss/serviced/domain/service"
 	"github.com/zenoss/serviced/domain/serviceconfigfile"
-	"github.com/zenoss/serviced/domain/servicestate"
-	"github.com/zenoss/serviced/zzk"
+	zkservice "github.com/zenoss/serviced/zzk/service"
 
 	"errors"
 	"fmt"
@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-var zkAPI func(zkDao *zzk.ZkDao) zkfuncs = getZKAPI
+var zkAPI func(conn *coordclient.Client) zkfuncs = getZKAPI
 
 // AddService add a service. Return  error if service already exists
 func (f *Facade) AddService(ctx datastore.Context, svc service.Service) error {
@@ -47,7 +47,7 @@ func (f *Facade) AddService(ctx datastore.Context, svc service.Service) error {
 	}
 	glog.V(2).Infof("Facade.AddService: id %+v", svc.Id)
 
-	return zkAPI(f.zkDao).updateService(&svc)
+	return zkAPI(f.zkclient).updateService(&svc)
 }
 
 //
@@ -68,7 +68,7 @@ func (f *Facade) RemoveService(ctx datastore.Context, id string) error {
 	//TODO: should services already be stopped before removing to prevent half running service in case of error while deleting?
 
 	err := f.walkServices(ctx, id, func(svc *service.Service) error {
-		zkAPI(f.zkDao).removeService(svc.Id)
+		zkAPI(f.zkclient).removeService(svc.Id)
 		return nil
 	})
 
@@ -182,8 +182,8 @@ func (f *Facade) GetServiceEndpoints(ctx datastore.Context, serviceId string) (m
 
 		//build 'OR' query to grab all service states with in "service" tree
 		relatedServiceIDs := walkTree(topService)
-		var states []*servicestate.ServiceState
-		err = zkAPI(f.zkDao).getSvcStates(&states, relatedServiceIDs...)
+		var states []*dao.RunningService
+		err = zkAPI(f.zkclient).getSvcStates(&states, relatedServiceIDs...)
 		if err != nil {
 			return result, err
 		}
@@ -199,7 +199,8 @@ func (f *Facade) GetServiceEndpoints(ctx datastore.Context, serviceId string) (m
 			if err != nil {
 				continue //Don't spam error message; it was reported at validation time
 			}
-			for _, ss := range states {
+			for _, rs := range states {
+				ss := rs.GetServiceState()
 				hostPort, containerPort, protocol, match := ss.GetHostEndpointInfo(applicationRegex)
 				if match {
 					glog.V(1).Infof("Matched endpoint: %s.%s -> %s:%d (%s/%d)",
@@ -714,32 +715,49 @@ func (f *Facade) updateService(ctx datastore.Context, svc *service.Service) erro
 	if err := svcStore.Put(ctx, svc); err != nil {
 		return err
 	}
-	return zkAPI(f.zkDao).updateService(svc)
+	return zkAPI(f.zkclient).updateService(svc)
 }
 
-func getZKAPI(zkDao *zzk.ZkDao) zkfuncs {
-	return &zkf{zkDao}
+func getZKAPI(client *coordclient.Client) zkfuncs {
+	return &zkf{client}
 }
 
 type zkfuncs interface {
 	updateService(svc *service.Service) error
 	removeService(svcID string) error
-	getSvcStates(serviceStates *[]*servicestate.ServiceState, serviceIds ...string) error
+	getSvcStates(states *[]*dao.RunningService, serviceIds ...string) error
 }
 
 type zkf struct {
-	zkDao *zzk.ZkDao
+	client *coordclient.Client
 }
 
 func (z *zkf) updateService(svc *service.Service) error {
-	return z.zkDao.UpdateService(svc)
+	conn, err := z.client.GetConnection()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return zkservice.UpdateService(conn, svc)
 }
 
 func (z *zkf) removeService(id string) error {
-	return z.zkDao.RemoveService(id)
+	conn, err := z.client.GetConnection()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return zkservice.RemoveService(conn, id)
 }
-func (z *zkf) getSvcStates(serviceStates *[]*servicestate.ServiceState, serviceIds ...string) error {
-	return z.zkDao.GetServiceStates(serviceStates, serviceIds...)
+
+func (z *zkf) getSvcStates(states *[]*dao.RunningService, serviceIds ...string) (err error) {
+	conn, err := z.client.GetConnection()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	*states, err = zkservice.LoadRunningServicesByService(conn, serviceIds...)
+	return err
 }
 
 func lookUpTenant(svcID string) (string, bool) {

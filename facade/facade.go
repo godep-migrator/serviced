@@ -5,21 +5,21 @@
 package facade
 
 import (
+	coordclient "github.com/zenoss/serviced/coordinator/client"
 	"github.com/zenoss/serviced/domain/host"
 	"github.com/zenoss/serviced/domain/pool"
 	"github.com/zenoss/serviced/domain/service"
 	"github.com/zenoss/serviced/domain/servicetemplate"
-	"github.com/zenoss/serviced/zzk"
 )
 
 // New creates an initialized Facade instance
-func New(zkDAO *zzk.ZkDao, dockerRegistry string) *Facade {
+func New(zkclient *coordclient.Client, dockerRegistry string) *Facade {
 	return &Facade{
 		hostStore:      host.NewStore(),
 		poolStore:      pool.NewStore(),
 		serviceStore:   service.NewStore(),
 		templateStore:  servicetemplate.NewStore(),
-		zkDao:          zkDAO,
+		zkclient:       zkclient,
 		dockerRegistry: dockerRegistry,
 	}
 }
@@ -31,5 +31,5 @@ type Facade struct {
 	templateStore  *servicetemplate.Store
 	serviceStore   *service.Store
 	dockerRegistry string
-	zkDao          *zzk.ZkDao
+	zkclient       *coordclient.Client
 }

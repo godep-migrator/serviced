@@ -16,7 +16,6 @@ import (
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/dfs"
 	"github.com/zenoss/serviced/facade"
-	"github.com/zenoss/serviced/zzk"
 	zkdocker "github.com/zenoss/serviced/zzk/docker"
 
 	"fmt"
@@ -39,13 +38,12 @@ type ControlPlaneDao struct {
 	varpath  string
 	vfs      string
 	zclient  *coordclient.Client
-	zkDao    *zzk.ZkDao
 	dfs      *dfs.DistributedFileSystem
 	//needed while we move things over
 	facade         *facade.Facade
 	dockerRegistry string
-	backupLock sync.RWMutex
-	restoreLock sync.RWMutex
+	backupLock     sync.RWMutex
+	restoreLock    sync.RWMutex
 }
 
 func serviceGetter(ctx datastore.Context, f *facade.Facade) service.GetService {
@@ -120,7 +118,7 @@ func NewControlPlaneDao(hostName string, port int, facade *facade.Facade, docker
 	return dao, nil
 }
 
-func NewControlSvc(hostName string, port int, facade *facade.Facade, zclient *coordclient.Client, varpath, vfs string, dockerRegistry string, zkDAO *zzk.ZkDao) (*ControlPlaneDao, error) {
+func NewControlSvc(hostName string, port int, facade *facade.Facade, zclient *coordclient.Client, varpath, vfs string, dockerRegistry string) (*ControlPlaneDao, error) {
 	glog.V(2).Info("calling NewControlSvc()")
 	defer glog.V(2).Info("leaving NewControlSvc()")
 
@@ -136,7 +134,6 @@ func NewControlSvc(hostName string, port int, facade *facade.Facade, zclient *co
 	s.vfs = vfs
 
 	s.zclient = zclient
-	s.zkDao = zkDAO
 
 	// create the account credentials
 	if err = createSystemUser(s); err != nil {

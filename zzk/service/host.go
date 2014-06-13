@@ -267,3 +267,14 @@ func (l *HostListener) detachInstance(done <-chan interface{}, state *servicesta
 	<-done
 	return l.removeInstance(state)
 }
+
+func StopServiceInstance(conn client.Connection, hostID, stateID string) error {
+	hpath := hostpath(hostID, stateID)
+	var hs HostState
+	if err := conn.Get(hpath, &hs); err != nil {
+		return err
+	}
+	glog.V(2).Infof("Stopping instance %s via host %s", stateID, hostID)
+	hs.DesiredState = service.SVCStop
+	return conn.Set(hpath, &hs)
+}

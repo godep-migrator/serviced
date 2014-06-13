@@ -9,14 +9,14 @@ package stats
 import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/zenoss/glog"
+	coordclient "github.com/zenoss/serviced/coordinator/client"
 	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/stats/cgroup"
 	"github.com/zenoss/serviced/utils"
-	"github.com/zenoss/serviced/zzk"
+	zkservice "github.com/zenoss/serviced/zzk/service"
 
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,9 +25,9 @@ import (
 
 // StatsReporter collects and posts serviced stats to the TSDB.
 type StatsReporter struct {
+	zkConn              coordclient.Connection
 	destination         string
 	closeChannel        chan bool
-	zkDAO               *zzk.ZkDao
 	containerRegistries map[registryKey]metrics.Registry
 	hostID              string
 	hostRegistry        metrics.Registry
@@ -46,17 +46,13 @@ type registryKey struct {
 }
 
 // NewStatsReporter creates a new StatsReporter and kicks off the reporting goroutine.
-func NewStatsReporter(destination string, interval time.Duration, zkDAO *zzk.ZkDao) (*StatsReporter, error) {
+func NewStatsReporter(conn coordclient.Connection, destination string, interval time.Duration) (*StatsReporter, error) {
 	hostID, err := utils.HostID()
 	if err != nil {
 		glog.Errorf("Could not determine host ID.")
 		return nil, err
 	}
-	if zkDAO == nil {
-		glog.Errorf("zkDAO can not be nil")
-		return nil, fmt.Errorf("zkdao can not be nil")
-	}
-	sr := StatsReporter{destination, make(chan bool), zkDAO, make(map[registryKey]metrics.Registry), hostID, nil}
+	sr := StatsReporter{conn, destination, make(chan bool), make(map[registryKey]metrics.Registry), hostID, nil}
 	sr.hostRegistry = sr.getOrCreateContainerRegistry("", 0)
 	go sr.report(interval)
 	return &sr, nil
@@ -126,8 +122,10 @@ func (sr StatsReporter) updateStats() {
 		metrics.GetOrRegisterGauge("Serviced.OpenFileDescriptors", sr.hostRegistry).Update(openFileDescriptorCount)
 	}
 	// Stats for the containers.
-	var running []*dao.RunningService
-	sr.zkDAO.GetRunningServicesForHost(sr.hostID, &running)
+	running, _ := zkservice.LoadRunningServicesByHost(sr.zkConn, sr.hostID)
+	if running == nil {
+		running = make([]*dao.RunningService, 0)
+	}
 	for _, rs := range running {
 		containerRegistry := sr.getOrCreateContainerRegistry(rs.ServiceID, rs.InstanceID)
 		if cpuacctStat, err := cgroup.ReadCpuacctStat("/sys/fs/cgroup/cpuacct/docker/" + rs.DockerID + "/cpuacct.stat"); err != nil {

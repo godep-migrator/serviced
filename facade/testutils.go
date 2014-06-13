@@ -5,6 +5,8 @@
 package facade
 
 import (
+	"github.com/zenoss/serviced/coordinator/client"
+	"github.com/zenoss/serviced/dao"
 	"github.com/zenoss/serviced/datastore"
 	"github.com/zenoss/serviced/datastore/elastic"
 	"github.com/zenoss/serviced/domain/addressassignment"
@@ -12,10 +14,8 @@ import (
 	"github.com/zenoss/serviced/domain/pool"
 	"github.com/zenoss/serviced/domain/service"
 	"github.com/zenoss/serviced/domain/serviceconfigfile"
-	"github.com/zenoss/serviced/domain/servicestate"
 	"github.com/zenoss/serviced/domain/servicetemplate"
 	"github.com/zenoss/serviced/domain/user"
-	"github.com/zenoss/serviced/zzk"
 	gocheck "gopkg.in/check.v1"
 )
 
@@ -45,10 +45,10 @@ func (ft *FacadeTest) SetUpSuite(c *gocheck.C) {
 	datastore.Register(ft.Driver())
 	ft.CTX = datastore.Get()
 	//empty zkdao will not work but tests shouldn't call this anyway.
-	ft.Facade = New(&zzk.ZkDao{}, "localhost:5000")
+	ft.Facade = New(&client.Client{}, "localhost:5000")
 
 	//mock out ZK calls to no ops
-	zkAPI = func(zkdao *zzk.ZkDao) zkfuncs { return &zkMock{} }
+	zkAPI = func(client *client.Client) zkfuncs { return &zkMock{} }
 }
 
 type zkMock struct {
@@ -61,6 +61,6 @@ func (z *zkMock) updateService(svc *service.Service) error {
 func (z *zkMock) removeService(id string) error {
 	return nil
 }
-func (z *zkMock) getSvcStates(serviceStates *[]*servicestate.ServiceState, serviceIds ...string) error {
+func (z *zkMock) getSvcStates(serviceStates *[]*dao.RunningService, serviceIds ...string) error {
 	return nil
 }

@@ -9,7 +9,6 @@ import (
 	"github.com/zenoss/serviced/datastore"
 	"github.com/zenoss/serviced/domain/pool"
 	"github.com/zenoss/serviced/domain/service"
-	"github.com/zenoss/serviced/domain/servicestate"
 	"github.com/zenoss/serviced/facade"
 	"github.com/zenoss/serviced/utils"
 	"github.com/zenoss/serviced/volume"
@@ -39,7 +38,7 @@ var (
 )
 
 // runServiceCommand attaches to a service state container and executes an arbitrary bash command
-var runServiceCommand = func(state *servicestate.ServiceState, command string) ([]byte, error) {
+var runServiceCommand = func(state *dao.RunningService, command string) ([]byte, error) {
 	return utils.AttachAndRun(state.DockerID, []string{command})
 }
 
@@ -73,7 +72,7 @@ func NewDistributedFileSystem(client dao.ControlPlane, facade *facade.Facade, do
 }
 
 // Pauses a running service
-func (d *DistributedFileSystem) Pause(service *service.Service, state *servicestate.ServiceState) error {
+func (d *DistributedFileSystem) Pause(service *service.Service, state *dao.RunningService) error {
 	if output, err := runServiceCommand(state, service.Snapshot.Pause); err != nil {
 		errmsg := fmt.Sprintf("output: \"%s\", err: %s", output, err)
 		glog.V(2).Infof("DistributedFileSystem.Pause service=%+v err=%s", service, err)
@@ -83,7 +82,7 @@ func (d *DistributedFileSystem) Pause(service *service.Service, state *servicest
 }
 
 // Resumes a paused service
-func (d *DistributedFileSystem) Resume(service *service.Service, state *servicestate.ServiceState) error {
+func (d *DistributedFileSystem) Resume(service *service.Service, state *dao.RunningService) error {
 	if output, err := runServiceCommand(state, service.Snapshot.Resume); err != nil {
 		errmsg := fmt.Sprintf("output: \"%s\", err: %s", output, err)
 		glog.V(2).Infof("DistributedFileSystem.Resume service=%+v err=%s", service, err)
@@ -123,8 +122,8 @@ func (d *DistributedFileSystem) Snapshot(tenantId string) (string, error) {
 			continue
 		}
 
-		var states []*servicestate.ServiceState
-		if err := d.client.GetServiceStates(service.Id, &states); err != nil {
+		var states []*dao.RunningService
+		if err := d.client.GetRunningServices(service.Id, &states); err != nil {
 			glog.V(2).Infof("DistributedFileSystem.Snapshot service=%+v, err=%s", myService.Id, err)
 			return "", err
 		}
@@ -372,8 +371,8 @@ func (d *DistributedFileSystem) Rollback(snapshotId string) error {
 		return err
 	}
 	for _, service := range services {
-		var states []*servicestate.ServiceState
-		if err := d.client.GetServiceStates(service.Id, &states); err != nil {
+		var states []*dao.RunningService
+		if err := d.client.GetRunningServices(service.Id, &states); err != nil {
 			glog.V(2).Infof("DistributedFileSystem.Rollback tenant=%+v err=%s", tenantId, err)
 			return err
 		}
