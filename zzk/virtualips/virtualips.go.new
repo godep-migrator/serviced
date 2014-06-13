@@ -48,10 +48,18 @@ func NewVIPListener(shutdown <-chan interface{}, conn client.Connection, handler
 }
 
 func (listener *VIPListener) Listen() {
-	shutdown := make(chan interface{})
+	var (
+		shutdown   = make(chan interface{})
+		done       = make(chan string)
+		processing = make(map[string]interface{})
+	)
+
 	defer func() {
 		glog.Info("Shutting down all virtual IP listeners")
 		close(shutdown)
+		for len(processing) > 0 {
+			delete(processing, <-done)
+		}
 	}()
 
 	if exists, err := listener.conn.Exists(vippath()); err != nil {
@@ -63,11 +71,6 @@ func (listener *VIPListener) Listen() {
 	if err := listener.conn.CreateDir(vippath()); err != nil {
 		glog.Error("Unable to create virtual IP path on zookeeper: ", err)
 	}
-
-	var (
-		done       = make(chan string)
-		processing = make(map[string]interface{})
-	)
 
 	vipIndex := 0
 	for {

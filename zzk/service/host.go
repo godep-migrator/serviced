@@ -64,10 +64,18 @@ func NewHostListener(shutdown <-chan interface{}, conn client.Connection, handle
 }
 
 func (l *HostListener) Listen() {
-	shutdown := make(chan interface{})
+	var (
+		shutdown   = make(chan interface{})
+		done       = make(chan string)
+		processing = make(map[string]interface{})
+	)
+
 	defer func() {
 		glog.Infof("Agent receieved interrupt")
 		close(shutdown)
+		for len(processing) > 0 {
+			delete(processing, <-done)
+		}
 	}()
 
 	path := hostpath(l.hostID)
@@ -80,11 +88,6 @@ func (l *HostListener) Listen() {
 		glog.Errorf("Unable to create host path %s on zookeeper: %s", l.hostID, err)
 		return
 	}
-
-	var (
-		done       = make(chan string)
-		processing = make(map[string]interface{})
-	)
 
 	for {
 		stateIDs, event, err := l.conn.ChildrenW(path)

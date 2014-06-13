@@ -35,10 +35,18 @@ func NewServiceListener(conn client.Connection, handler ServiceHandler) *Service
 }
 
 func (l *ServiceListener) Listen() {
-	shutdown := make(chan interface{})
+	var (
+		shutdown   = make(chan interface{})
+		done       = make(chan string)
+		processing = make(map[string]interface{})
+	)
+
 	defer func() {
 		glog.Info("Shutting down all goroutines")
 		close(shutdown)
+		for len(processing) > 0 {
+			delete(processing, <-done)
+		}
 	}()
 
 	if exists, err := l.conn.Exists(servicepath()); err != nil {
@@ -50,11 +58,6 @@ func (l *ServiceListener) Listen() {
 		glog.Error("Unable to create service path on zookeeper: ", err)
 		return
 	}
-
-	var (
-		done       = make(chan string)
-		processing = make(map[string]interface{})
-	)
 
 	for {
 		serviceIDs, event, err := l.conn.ChildrenW(servicepath())
