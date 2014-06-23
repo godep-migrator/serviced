@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"path"
+	"sort"
 
 	"github.com/zenoss/glog"
 	"github.com/zenoss/serviced/coordinator/client"
@@ -20,6 +21,15 @@ func servicepath(nodes ...string) string {
 	p := append([]string{zkService}, nodes...)
 	return path.Join(p...)
 }
+
+type Instances []*servicestate.ServiceState
+
+func (inst *Instances) Len() int                                    { return len(*inst) }
+func (inst *Instances) Less(i, j int) bool                          { return (*inst)[i].InstanceID < (*inst)[j].InstanceID }
+func (inst *Instances) Swap(i, j int)                               { (*inst)[i], (*inst)[j] = (*inst)[j], (*inst)[i] }
+func (inst *Instances) Append(state *servicestate.ServiceState)     { *inst = append(*inst, state) }
+func (inst *Instances) Range(i, j int) []*servicestate.ServiceState { return (*inst)[i:j] }
+func (inst *Instances) Tail() *servicestate.ServiceState            { return (*inst)[inst.Len()-1] }
 
 type ServiceHandler interface {
 	FindHostsInPool(poolID string) ([]*host.Host, error)
@@ -182,8 +192,18 @@ func (l *ServiceListener) stopServiceInstances(svc *service.Service, stateIDs []
 }
 
 func (l *ServiceListener) syncServiceInstances(svc *service.Service, stateIDs []string) {
-	netInstances := svc.Instances - len(stateIDs)
+	var instances Instances
+	for _, ssID := range stateIDs {
+		var state servicestate.ServiceState
+		if err := l.conn.Get(servicepath(svc.Id, ssID), &state); err != nil {
+			glog.Errorf("Could not get service state %s: %s", ssID, err)
+			return
+		}
+		instances.Append(&state)
+	}
+	sort.Sort(&instances)
 
+	netInstances := svc.Instances - len(stateIDs)
 	if netInstances > 0 {
 		// find the hosts
 		hosts, err := l.handler.FindHostsInPool(svc.PoolID)
@@ -192,28 +212,23 @@ func (l *ServiceListener) syncServiceInstances(svc *service.Service, stateIDs []
 			return
 		}
 
-		// find the free instance ids
-		used := make(map[int]interface{})
-		for _, ssID := range stateIDs {
-			var state servicestate.ServiceState
-			if err := l.conn.Get(servicepath(svc.Id, ssID), &state); err != nil {
-				glog.Errorf("Could not get service state %s: %s", ssID, err)
-				return
-			}
-			used[state.InstanceID] = nil
-		}
-		var instanceIDs []int
-		for i := 0; len(instanceIDs) < netInstances; i++ {
-			if _, ok := used[i]; !ok {
-				instanceIDs = append(instanceIDs, i)
-			}
+		last := instances.Tail().InstanceID + 1
+		instanceIDs := make([]int, netInstances)
+		for i := 0; i < netInstances; i++ {
+			instanceIDs[i] = last + i
 		}
 
 		glog.V(1).Infof("Starting up %d services for %s (%s)", netInstances, svc.Name, svc.Id)
 		l.startServiceInstances(svc, hosts, instanceIDs)
 	} else if netInstances < 0 {
+		netInstances = -netInstances
+		// stop oldest first
+		stateIDs := make([]string, netInstances)
+		for i, state := range instances.Range(0, netInstances) {
+			stateIDs[i] = state.Id
+		}
 		glog.V(1).Infof("Shutting down %d services for %s (%s)", netInstances, svc.Name, svc.Id)
-		l.stopServiceInstances(svc, stateIDs[:-netInstances])
+		l.stopServiceInstances(svc, stateIDs)
 	}
 }
 
