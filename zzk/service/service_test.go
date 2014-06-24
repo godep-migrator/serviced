@@ -186,7 +186,6 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 	}
 	listener := NewServiceListener(conn, handler)
 	spath := servicepath(svc.Id)
-	hpath := hostpath(handler.Hosts[0].ID)
 
 	// Start 5 instances and verify
 	svc.Instances = 5
@@ -198,8 +197,8 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 		t.Errorf("MISMATCH: expected %d instances; actual %d", svc.Instances, count)
 	}
 
-	usedinstanceID := make(map[int]interface{})
-	for i, id := range instances {
+	usedInstanceID := make(map[int]interface{})
+	for _, id := range instances {
 		var state servicestate.ServiceState
 		spath := servicepath(svc.Id)
 		if err := conn.Get(spath, &state); err != nil {
@@ -210,7 +209,7 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 		usedInstanceID[state.InstanceID] = nil
 
 		var hs HostState
-		hpath := hostpath(handler.Hosts[0].ID)
+		hpath := hostpath(handler.Hosts[0].ID, id)
 		if err := conn.Get(hpath, &hs); err != nil {
 			t.Fatalf("Error while looking up %s: %s", hpath, err)
 		} else if hs.DesiredState == service.SVCStop {
@@ -228,10 +227,10 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 		t.Errorf("MISMATCH: expected %d instances; actual %d", svc.Instances, count)
 	}
 
-	usedinstanceID := make(map[int]interface{})
+	usedInstanceID = make(map[int]interface{})
 	for _, id := range instances {
 		var state servicestate.ServiceState
-		spath := servicepath(svc.Id)
+		spath := servicepath(svc.Id, id)
 		if err := conn.Get(spath, &state); err != nil {
 			t.Fatalf("Error while looking up %s: %s", spath, err)
 		} else if _, ok := usedInstanceID[state.InstanceID]; ok {
@@ -240,7 +239,7 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 		usedInstanceID[state.InstanceID] = nil
 
 		var hs HostState
-		hpath := hostpath(handler.Hosts[0].ID)
+		hpath := hostpath(handler.Hosts[0].ID, id)
 		if err := conn.Get(hpath, &hs); err != nil {
 			t.Fatalf("Error while looking up %s: %s", hpath, err)
 		} else if hs.DesiredState == service.SVCStop {
@@ -258,23 +257,40 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 		t.Errorf("MISMATCH: expected %d instances; actual %d", svc.Instances, count)
 	}
 
-	running := 0
+	var stopped []*HostState
 	for _, id := range instances {
 		var hs HostState
-		hpath := hostpath(handler.Hosts[0].ID)
+		hpath := hostpath(handler.Hosts[0].ID, id)
 		if err := conn.Get(hpath, &hs); err != nil {
 			t.Fatalf("Error while looking up %s", hpath, err)
-		} else if hs.DesiredState == service.SVCRun {
-			running++
+		} else if hs.DesiredState == service.SVCStop {
+			stopped = append(stopped, &hs)
 		}
 	}
-	if svc.Instances == 
-
-	// Stop 0 instances
+	if running := len(instances) - len(stopped); svc.Instances != running {
+		t.Errorf("MISMATCH: expected %d running instances; actual %d", svc.Instances, running)
+	}
 
 	// Remove 2 stopped instances
-	// Start 1 instance
+	for i := 0; i < 2; i++ {
+		hs := stopped[i]
+		hpath, spath := hostpath(hs.HostID, hs.ID), servicepath(hs.ServiceID, hs.ID)
+		if err := conn.Delete(hpath); err != nil {
+			t.Fatalf("Error while deleting %s: %s", hpath, err)
+		} else if err := conn.Delete(spath); err != nil {
+			t.Fatalf("Error while deleting %s: %s", spath, err)
+		}
+	}
 
+	// Start 1 instance
+	svc.Instances = 5
+	listener.syncServiceInstances(svc, instances)
+	instances, err = conn.Children(spath)
+	if err != nil {
+		t.Fatalf("Error while looking up %s: %s", spath, err)
+	} else if count := len(instances); count < svc.Instances {
+		t.Errorf("MISMATCH: expected AT LEAST %d running instances; actual %d", svc.Instances, count)
+	}
 }
 
 func TestServiceListener_ServicesOnHost(t *testing.T) {
