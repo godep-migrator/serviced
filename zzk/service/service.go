@@ -29,7 +29,7 @@ func (inst *Instances) Less(i, j int) bool                          { return (*i
 func (inst *Instances) Swap(i, j int)                               { (*inst)[i], (*inst)[j] = (*inst)[j], (*inst)[i] }
 func (inst *Instances) Append(state *servicestate.ServiceState)     { *inst = append(*inst, state) }
 func (inst *Instances) Range(i, j int) []*servicestate.ServiceState { return (*inst)[i:j] }
-func (inst *Instances) Tail() *servicestate.ServiceState            { return (*inst)[inst.Len()-1] }
+func (inst *Instances) Get(i int) *servicestate.ServiceState        { return (*inst)[i] }
 
 type ServiceHandler interface {
 	FindHostsInPool(poolID string) ([]*host.Host, error)
@@ -212,8 +212,13 @@ func (l *ServiceListener) syncServiceInstances(svc *service.Service, stateIDs []
 			return
 		}
 
-		last := instances.Tail().InstanceID + 1
-		instanceIDs := make([]int, netInstances)
+		var (
+			last        = 0
+			instanceIDs = make([]int, netInstances)
+		)
+		if count := instances.Len(); count > 0 {
+			last = instances.Get(count-1).InstanceID + 1
+		}
 		for i := 0; i < netInstances; i++ {
 			instanceIDs[i] = last + i
 		}

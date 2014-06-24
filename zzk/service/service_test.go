@@ -184,8 +184,11 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 		Id:        "test-service-1",
 		Endpoints: make([]service.ServiceEndpoint, 1),
 	}
-	listener := NewServiceListener(conn, handler)
 	spath := servicepath(svc.Id)
+	if err := conn.Create(spath, svc); err != nil {
+		t.Fatalf("Error while creating node %s: %s", spath, err)
+	}
+	listener := NewServiceListener(conn, handler)
 
 	// Start 5 instances and verify
 	svc.Instances = 5
@@ -200,7 +203,7 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 	usedInstanceID := make(map[int]interface{})
 	for _, id := range instances {
 		var state servicestate.ServiceState
-		spath := servicepath(svc.Id)
+		spath := servicepath(svc.Id, id)
 		if err := conn.Get(spath, &state); err != nil {
 			t.Fatalf("Error while looking up %s: %s", spath, err)
 		} else if _, ok := usedInstanceID[state.InstanceID]; ok {
