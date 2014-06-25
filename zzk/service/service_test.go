@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/zenoss/serviced/coordinator/client"
 	"github.com/zenoss/serviced/domain/host"
@@ -37,6 +38,112 @@ func TestServiceListener_Listen(t *testing.T) {
 }
 
 func TestServiceListener_listenService(t *testing.T) {
+	conn := client.NewTestConnection()
+	defer conn.Close()
+	handler := &TestServiceHandler{
+		Hosts: make([]*host.Host, 0),
+		Index: 0,
+	}
+	handler.Hosts = append(handler.Hosts, &host.Host{
+		ID:     "test-host-1",
+		IPAddr: "test-host-1-ip",
+	})
+
+	// Add 1 service for 1 host
+	svc := &service.Service{
+		Id:           "test-service-1",
+		Endpoints:    make([]service.ServiceEndpoint, 1),
+		DesiredState: service.SVCStop,
+	}
+	spath := servicepath(svc.Id)
+	if err := conn.Create(spath, svc); err != nil {
+		t.Fatalf("Could not create service %s at %s: %s", svc.Id, spath, err)
+	}
+
+	var (
+		shutdown = make(chan interface{})
+		done     = make(chan string)
+	)
+	listener := NewServiceListener(conn, handler)
+	go listener.listenService(shutdown, done, svc.Id)
+
+	// Wait 3 seconds and shutdown
+	<-time.After(3 * time.Second)
+	t.Log("Signaling shutdown for service listener")
+	close(shutdown)
+	if serviceId := <-done; serviceId != svc.Id {
+		t.Errorf("MISMATCH: invalid service id %s; expected: %s", serviceId, svc.Id)
+	}
+
+	// Start listener with 2 instances and stop service
+	shutdown = make(chan interface{})
+	done = make(chan string)
+	listener = NewServiceListener(conn, handler)
+	go listener.listenService(shutdown, done, svc.Id)
+
+	instancesC := make(chan []string)
+	getInstances := func() {
+		for {
+			instances, err := conn.Children(spath)
+			if err != nil {
+				t.Fatalf("Could not look up service instances for %s: %s", svc.Id, err)
+			}
+			if count := len(instances); count < svc.Instances {
+				<-time.After(time.Second)
+			} else {
+				instancesC <- instances
+				return
+			}
+		}
+	}
+
+	t.Log("Starting service with 2 instances")
+	svc.Instances = 2
+	svc.DesiredState = service.SVCRun
+	if err := conn.Set(spath, svc); err != nil {
+		t.Fatalf("Could not update service %s at %s: %s", svc.Id, spath, err)
+	}
+	go getInstances()
+	for _, ssID := range <-instancesC {
+		hpath := hostpath(handler.Hosts[0].ID, ssID)
+
+		var hs HostState
+		if err := conn.Get(hpath, &hs); err != nil {
+			t.Fatalf("Could not look up instance %s: %s", ssID, err)
+		}
+		if hs.DesiredState != service.SVCRun {
+			t.Errorf("Service instance %s not started", hs.ID)
+		}
+	}
+
+	// Stop service
+	t.Log("Stopping service")
+	svc.DesiredState = service.SVCStop
+	if err := conn.Set(spath, svc); err != nil {
+		t.Fatalf("Could not update service %s at %s: %s", svc.Id, spath, err)
+	}
+
+	go getInstances()
+	for _, ssID := range <-instancesC {
+		hpath := hostpath(handler.Hosts[0].ID, ssID)
+
+		var hs HostState
+		if err := conn.Get(hpath, &hs); err != nil {
+			t.Fatalf("Could not look up instance %s: %s", ssID, err)
+		}
+		if hs.DesiredState != service.SVCStop {
+			t.Errorf("Service instance %s not stopped", hs.ID)
+		}
+	}
+
+	// Remove the service
+	t.Log("Removing service")
+	if err := conn.Delete(spath); err != nil {
+		t.Fatalf("Could not remove service %s at %s", svc.Id, spath, err)
+	}
+	if serviceId := <-done; serviceId != svc.Id {
+		t.Errorf("MISMATCH: invalid service id %s; expected: %s", serviceId, svc.Id)
+	}
 }
 
 func TestServiceListener_startServiceInstances(t *testing.T) {
@@ -190,26 +297,35 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 	}
 	listener := NewServiceListener(conn, handler)
 
-	// Start 5 instances and verify
-	svc.Instances = 5
-	listener.syncServiceInstances(svc, []string{})
 	instances, err := conn.Children(spath)
+	if err != nil {
+		t.Fatalf("Error while looking up %s: %s", spath, err)
+	}
+	if len(instances) > 0 {
+		t.Fatal("Expected 0 instances: ", instances)
+	}
+
+	// Start 5 instances and verify
+	t.Log("Starting 5 instances")
+	svc.Instances = 5
+	listener.syncServiceInstances(svc, instances)
+	instances, err = conn.Children(spath)
 	if err != nil {
 		t.Fatalf("Error while looking up %s: %s", spath, err)
 	} else if count := len(instances); count != svc.Instances {
 		t.Errorf("MISMATCH: expected %d instances; actual %d", svc.Instances, count)
 	}
 
-	usedInstanceID := make(map[int]interface{})
+	usedInstanceID := make(map[int]*servicestate.ServiceState)
 	for _, id := range instances {
 		var state servicestate.ServiceState
 		spath := servicepath(svc.Id, id)
 		if err := conn.Get(spath, &state); err != nil {
 			t.Fatalf("Error while looking up %s: %s", spath, err)
-		} else if _, ok := usedInstanceID[state.InstanceID]; ok {
-			t.Errorf("DUPLICATE: found 2 instances with the same id: %d", state.InstanceID)
+		} else if ss, ok := usedInstanceID[state.InstanceID]; ok {
+			t.Errorf("DUPLICATE: found 2 instances with the same id: [%v] [%v]", ss, state)
 		}
-		usedInstanceID[state.InstanceID] = nil
+		usedInstanceID[state.InstanceID] = &state
 
 		var hs HostState
 		hpath := hostpath(handler.Hosts[0].ID, id)
@@ -221,6 +337,7 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 	}
 
 	// Start 3 instances and verify
+	t.Log("Adding 3 more instances")
 	svc.Instances = 8
 	listener.syncServiceInstances(svc, instances)
 	instances, err = conn.Children(spath)
@@ -230,16 +347,16 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 		t.Errorf("MISMATCH: expected %d instances; actual %d", svc.Instances, count)
 	}
 
-	usedInstanceID = make(map[int]interface{})
+	usedInstanceID = make(map[int]*servicestate.ServiceState)
 	for _, id := range instances {
 		var state servicestate.ServiceState
 		spath := servicepath(svc.Id, id)
 		if err := conn.Get(spath, &state); err != nil {
 			t.Fatalf("Error while looking up %s: %s", spath, err)
-		} else if _, ok := usedInstanceID[state.InstanceID]; ok {
-			t.Errorf("DUPLICATE: found 2 instances with the same id: %d", state.InstanceID)
+		} else if ss, ok := usedInstanceID[state.InstanceID]; ok {
+			t.Errorf("DUPLICATE: found 2 instances with the same id: [%v] [%v]", ss, state)
 		}
-		usedInstanceID[state.InstanceID] = nil
+		usedInstanceID[state.InstanceID] = &state
 
 		var hs HostState
 		hpath := hostpath(handler.Hosts[0].ID, id)
@@ -251,6 +368,7 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 	}
 
 	// Stop 4 instances
+	t.Log("Stopping 4 instances")
 	svc.Instances = 4
 	listener.syncServiceInstances(svc, instances)
 	instances, err = conn.Children(spath)
@@ -275,6 +393,7 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 	}
 
 	// Remove 2 stopped instances
+	t.Log("Removing 2 stopped instances")
 	for i := 0; i < 2; i++ {
 		hs := stopped[i]
 		hpath, spath := hostpath(hs.HostID, hs.ID), servicepath(hs.ServiceID, hs.ID)
@@ -284,8 +403,13 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 			t.Fatalf("Error while deleting %s: %s", spath, err)
 		}
 	}
+	instances, err = conn.Children(spath)
+	if err != nil {
+		t.Fatalf("Error while looking up %s: %s", spath, err)
+	}
 
 	// Start 1 instance
+	t.Log("Adding 1 more instance")
 	svc.Instances = 5
 	listener.syncServiceInstances(svc, instances)
 	instances, err = conn.Children(spath)

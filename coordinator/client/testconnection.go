@@ -47,7 +47,7 @@ func (conn *TestConnection) updatewatch(p string, eventtype EventType) {
 }
 
 func (conn *TestConnection) addwatch(p string) <-chan Event {
-	eventC := make(chan Event)
+	eventC := make(chan Event, 1)
 	watch := conn.watches[p]
 	conn.watches[p] = eventC
 	if watch != nil {
