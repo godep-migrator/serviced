@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"path"
 	"sort"
@@ -229,8 +230,11 @@ func (conn *TestConnection) Set(p string, node Node) error {
 		return err
 	}
 
-	conn.nodes[p] = data
-	conn.updatewatch(p, EventNodeDataChanged)
+	// only update if something actually changed
+	if bytes.Compare(conn.nodes[p], data) != 0 {
+		conn.nodes[p] = data
+		conn.updatewatch(p, EventNodeDataChanged)
+	}
 	return nil
 }
 

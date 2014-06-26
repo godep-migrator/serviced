@@ -203,7 +203,7 @@ func (l *HostListener) listenHostState(shutdown <-chan interface{}, done chan<- 
 
 func (l *HostListener) pingInstance(done <-chan interface{}, interval time.Duration, state *servicestate.ServiceState) {
 	statepath := servicepath(state.ServiceID, state.Id)
-	wait := time.After(time.Second)
+	wait := time.After(interval)
 	for {
 		select {
 		case <-wait:
@@ -212,7 +212,7 @@ func (l *HostListener) pingInstance(done <-chan interface{}, interval time.Durat
 			} else if l.conn.Set(statepath, state); err != nil {
 				glog.V(2).Infof("Could not update instance %s: %s", state.Id, err)
 			}
-			wait = time.After(interval * time.Second)
+			wait = time.After(interval)
 		case <-done:
 			state.Terminated = time.Now()
 			if err := l.conn.Set(statepath, state); err != nil {
@@ -228,7 +228,7 @@ func (l *HostListener) startInstance(svc *service.Service, state *servicestate.S
 	if err := l.handler.StartService(done, svc, state); err != nil {
 		return nil, err
 	}
-	go l.pingInstance(done, 5, state)
+	go l.pingInstance(done, 5*time.Second, state)
 	return done, nil
 }
 
@@ -237,7 +237,7 @@ func (l *HostListener) attachInstance(svc *service.Service, state *servicestate.
 	if err := l.handler.AttachService(done, svc, state); err != nil {
 		return nil, err
 	}
-	go l.pingInstance(done, 5, state)
+	go l.pingInstance(done, 5*time.Second, state)
 	return done, nil
 }
 
