@@ -35,6 +35,75 @@ func (handler *TestServiceHandler) SelectHost(service *service.Service, hosts []
 }
 
 func TestServiceListener_Listen(t *testing.T) {
+	conn := client.NewTestConnection()
+	defer conn.Close()
+	handler := &TestServiceHandler{
+		Hosts: make([]*host.Host, 0),
+		Index: 0,
+	}
+	handler.Hosts = append(handler.Hosts, &host.Host{
+		ID:     "test-host-1",
+		IPAddr: "test-host-1-ip",
+	})
+
+	t.Log("Start and stop listener with no services")
+	shutdown := make(chan interface{})
+	done := make(chan interface{})
+	listener := NewServiceListener(conn, handler)
+	go func() {
+		listener.Listen(shutdown)
+		close(done)
+	}()
+
+	<-time.After(2 * time.Second)
+	t.Log("shutting down listener with no services")
+	close(shutdown)
+	<-done
+
+	t.Log("Start and stop listener with multiple services")
+	shutdown = make(chan interface{})
+	done = make(chan interface{})
+	go func() {
+		listener.Listen(shutdown)
+		close(done)
+	}()
+
+	svcs := []*service.Service{
+		{
+			Id:           "test-service-1",
+			Endpoints:    make([]service.ServiceEndpoint, 1),
+			DesiredState: service.SVCRun,
+			Instances:    3,
+		}, {
+			Id:           "test-service-2",
+			Endpoints:    make([]service.ServiceEndpoint, 1),
+			DesiredState: service.SVCRun,
+			Instances:    2,
+		},
+	}
+
+	for _, s := range svcs {
+		if err := conn.Create(servicepath(s.Id), s); err != nil {
+			t.Fatalf("Could not create service %s: %s", s.Id, err)
+		}
+	}
+
+	// wait for instances to start
+	for {
+		if rss, err := LoadRunningServices(conn); err != nil {
+			t.Fatalf("Could not load running services: %s", err)
+		} else if count := len(rss); count < 5 {
+			<-time.After(time.Second)
+		} else {
+			break
+		}
+	}
+
+	// shutdown
+	t.Log("services started, now shutting down")
+	close(shutdown)
+	<-done
+
 }
 
 func TestServiceListener_listenService(t *testing.T) {
@@ -81,20 +150,37 @@ func TestServiceListener_listenService(t *testing.T) {
 	listener = NewServiceListener(conn, handler)
 	go listener.listenService(shutdown, done, svc.Id)
 
-	instancesC := make(chan []string)
-	getInstances := func() {
+	getInstances := func() (count int) {
+		var (
+			instances []string
+			err       error
+		)
+
 		for {
-			instances, err := conn.Children(spath)
+			instances, err = conn.Children(spath)
 			if err != nil {
 				t.Fatalf("Could not look up service instances for %s: %s", svc.Id, err)
 			}
 			if count := len(instances); count < svc.Instances {
 				<-time.After(time.Second)
+				continue
 			} else {
-				instancesC <- instances
-				return
+				break
 			}
 		}
+
+		for _, ssID := range instances {
+			hpath := hostpath(handler.Hosts[0].ID, ssID)
+			var hs HostState
+			if err := conn.Get(hpath, &hs); err != nil {
+				t.Fatalf("Could not look up instance %s: %s", ssID, err)
+			}
+			if hs.DesiredState == service.SVCRun {
+				count++
+			}
+		}
+
+		return count
 	}
 
 	t.Log("Starting service with 2 instances")
@@ -103,17 +189,9 @@ func TestServiceListener_listenService(t *testing.T) {
 	if err := conn.Set(spath, svc); err != nil {
 		t.Fatalf("Could not update service %s at %s: %s", svc.Id, spath, err)
 	}
-	go getInstances()
-	for _, ssID := range <-instancesC {
-		hpath := hostpath(handler.Hosts[0].ID, ssID)
 
-		var hs HostState
-		if err := conn.Get(hpath, &hs); err != nil {
-			t.Fatalf("Could not look up instance %s: %s", ssID, err)
-		}
-		if hs.DesiredState != service.SVCRun {
-			t.Errorf("Service instance %s not started", hs.ID)
-		}
+	if count := getInstances(); count != svc.Instances {
+		t.Errorf("Expected %d started instances; actual: %d", svc.Instances, count)
 	}
 
 	// Stop service
@@ -123,16 +201,12 @@ func TestServiceListener_listenService(t *testing.T) {
 		t.Fatalf("Could not update service %s at %s: %s", svc.Id, spath, err)
 	}
 
-	go getInstances()
-	for _, ssID := range <-instancesC {
-		hpath := hostpath(handler.Hosts[0].ID, ssID)
-
-		var hs HostState
-		if err := conn.Get(hpath, &hs); err != nil {
-			t.Fatalf("Could not look up instance %s: %s", ssID, err)
-		}
-		if hs.DesiredState != service.SVCStop {
-			t.Errorf("Service instance %s not stopped", hs.ID)
+	for {
+		if count := getInstances(); count > 0 {
+			t.Logf("Waiting for %d instances to stop", count)
+			<-time.After(time.Second)
+		} else {
+			break
 		}
 	}
 

@@ -70,10 +70,8 @@ func LoadRunningServices(conn client.Connection) ([]*dao.RunningService, error) 
 	}
 
 	// filter non-unique service ids
-	var (
-		unique map[string]interface{}
-		ids    []string
-	)
+	unique := make(map[string]interface{})
+	ids := make([]string, 0)
 	for _, serviceID := range serviceIDs {
 		if _, ok := unique[serviceID]; !ok {
 			unique[serviceID] = nil
