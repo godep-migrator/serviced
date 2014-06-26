@@ -186,7 +186,7 @@ func TestServiceListener_listenService(t *testing.T) {
 	t.Log("Starting service with 2 instances")
 	svc.Instances = 2
 	svc.DesiredState = service.SVCRun
-	if err := conn.Set(spath, svc); err != nil {
+	if err := UpdateService(conn, svc); err != nil {
 		t.Fatalf("Could not update service %s at %s: %s", svc.Id, spath, err)
 	}
 
@@ -197,7 +197,7 @@ func TestServiceListener_listenService(t *testing.T) {
 	// Stop service
 	t.Log("Stopping service")
 	svc.DesiredState = service.SVCStop
-	if err := conn.Set(spath, svc); err != nil {
+	if err := UpdateService(conn, svc); err != nil {
 		t.Fatalf("Could not update service %s at %s: %s", svc.Id, spath, err)
 	}
 
@@ -212,7 +212,7 @@ func TestServiceListener_listenService(t *testing.T) {
 
 	// Remove the service
 	t.Log("Removing service")
-	if err := conn.Delete(spath); err != nil {
+	if err := RemoveService(conn, svc.Id); err != nil {
 		t.Fatalf("Could not remove service %s at %s", svc.Id, spath, err)
 	}
 	if serviceId := <-done; serviceId != svc.Id {
@@ -492,13 +492,4 @@ func TestServiceListener_syncServiceInstances(t *testing.T) {
 	} else if count := len(instances); count < svc.Instances {
 		t.Errorf("MISMATCH: expected AT LEAST %d running instances; actual %d", svc.Instances, count)
 	}
-}
-
-func TestServiceListener_ServicesOnHost(t *testing.T) {
-}
-
-func TestUpdateService(t *testing.T) {
-}
-
-func TestRemoveService(t *testing.T) {
 }
