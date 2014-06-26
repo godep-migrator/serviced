@@ -39,19 +39,18 @@ type ActionHandler interface {
 
 // ActionListener is the listener object for /docker/actions
 type ActionListener struct {
-	shutdown <-chan interface{}
-	conn     client.Connection
-	handler  ActionHandler
-	hostID   string
+	conn    client.Connection
+	handler ActionHandler
+	hostID  string
 }
 
 // NewActionListener instantiates a new action listener for /docker/actions
-func NewActionListener(shutdown <-chan interface{}, conn client.Connection, handler ActionHandler, hostID string) *ActionListener {
-	return &ActionListener{shutdown, conn, handler, hostID}
+func NewActionListener(conn client.Connection, handler ActionHandler, hostID string) *ActionListener {
+	return &ActionListener{conn, handler, hostID}
 }
 
 // Listen listens for new actions for a particular host
-func (l *ActionListener) Listen() {
+func (l *ActionListener) Listen(shutdown <-chan interface{}) {
 	// Make the path if it doesn't exist
 	node := actionPath(l.hostID)
 	if err := l.conn.CreateDir(node); err != nil {
@@ -107,7 +106,7 @@ func (l *ActionListener) Listen() {
 		select {
 		case e := <-event:
 			glog.V(2).Infof("Receieved docker action event: %v", e)
-		case <-l.shutdown:
+		case <-shutdown:
 			return
 		}
 	}

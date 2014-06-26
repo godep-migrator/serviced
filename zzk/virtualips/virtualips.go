@@ -36,26 +36,25 @@ type VIPHandler interface {
 }
 
 type VIPListener struct {
-	shutdown <-chan interface{}
-	conn     client.Connection
-	handler  VIPHandler
-	hostID   string
+	conn    client.Connection
+	handler VIPHandler
+	hostID  string
 }
 
-func NewVIPListener(shutdown <-chan interface{}, conn client.Connection, handler VIPHandler, hostID string) *VIPListener {
-	return &VIPListener{shutdown, conn, handler, hostID}
+func NewVIPListener(conn client.Connection, handler VIPHandler, hostID string) *VIPListener {
+	return &VIPListener{conn, handler, hostID}
 }
 
-func (listener *VIPListener) Listen() {
+func (listener *VIPListener) Listen(shutdown <-chan interface{}) {
 	var (
-		shutdown   = make(chan interface{})
+		_shutdown  = make(chan interface{})
 		done       = make(chan string)
 		processing = make(map[string]interface{})
 	)
 
 	defer func() {
 		glog.Info("Shutting down all virtual IP listeners")
-		close(shutdown)
+		close(_shutdown)
 		for len(processing) > 0 {
 			delete(processing, <-done)
 		}
@@ -83,7 +82,7 @@ func (listener *VIPListener) Listen() {
 			if _, ok := processing[ip]; !ok {
 				glog.V(1).Info("Spawning a listener for IP ", ip)
 				processing[ip] = nil
-				go listener.listenVIP(shutdown, done, ip, vipIndex)
+				go listener.listenVIP(_shutdown, done, ip, vipIndex)
 				vipIndex++
 			}
 		}

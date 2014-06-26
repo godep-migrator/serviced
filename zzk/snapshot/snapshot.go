@@ -47,7 +47,7 @@ func NewSnapshotListener(conn client.Connection, handler SnapshotHandler) *Snaps
 }
 
 // Listen listens for changes on the event node and processes the snapshot
-func (l *SnapshotListener) Listen() {
+func (l *SnapshotListener) Listen(shutdown <-chan interface{}) {
 	// Make the path if it doesn't exist
 	if exists, err := l.conn.Exists(snapshotpath()); err != nil && err != client.ErrNoNode {
 		glog.Errorf("Error checking path %s: %s", snapshotpath(), err)
@@ -96,7 +96,12 @@ func (l *SnapshotListener) Listen() {
 			glog.V(1).Infof("Finished taking snapshot for request: %v", snapshot)
 		}
 		// Wait for an event that something changed
-		<-event
+		select {
+		case e := <-event:
+			glog.V(2).Info("Received snapshot event: ", e)
+		case <-shutdown:
+			return
+		}
 	}
 }
 

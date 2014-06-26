@@ -22,14 +22,14 @@ func servicepath(nodes ...string) string {
 	return path.Join(p...)
 }
 
-type Instances []*servicestate.ServiceState
+type instances []*servicestate.ServiceState
 
-func (inst *Instances) Len() int                                    { return len(*inst) }
-func (inst *Instances) Less(i, j int) bool                          { return (*inst)[i].InstanceID < (*inst)[j].InstanceID }
-func (inst *Instances) Swap(i, j int)                               { (*inst)[i], (*inst)[j] = (*inst)[j], (*inst)[i] }
-func (inst *Instances) Append(state *servicestate.ServiceState)     { *inst = append(*inst, state) }
-func (inst *Instances) Range(i, j int) []*servicestate.ServiceState { return (*inst)[i:j] }
-func (inst *Instances) Get(i int) *servicestate.ServiceState        { return (*inst)[i] }
+func (inst *instances) Len() int                                    { return len(*inst) }
+func (inst *instances) Less(i, j int) bool                          { return (*inst)[i].InstanceID < (*inst)[j].InstanceID }
+func (inst *instances) Swap(i, j int)                               { (*inst)[i], (*inst)[j] = (*inst)[j], (*inst)[i] }
+func (inst *instances) Append(state *servicestate.ServiceState)     { *inst = append(*inst, state) }
+func (inst *instances) Range(i, j int) []*servicestate.ServiceState { return (*inst)[i:j] }
+func (inst *instances) Get(i int) *servicestate.ServiceState        { return (*inst)[i] }
 
 type ServiceHandler interface {
 	FindHostsInPool(poolID string) ([]*host.Host, error)
@@ -45,16 +45,16 @@ func NewServiceListener(conn client.Connection, handler ServiceHandler) *Service
 	return &ServiceListener{conn, handler}
 }
 
-func (l *ServiceListener) Listen() {
+func (l *ServiceListener) Listen(shutdown <-chan interface{}) {
 	var (
-		shutdown   = make(chan interface{})
+		_shutdown  = make(chan interface{})
 		done       = make(chan string)
 		processing = make(map[string]interface{})
 	)
 
 	defer func() {
 		glog.Info("Shutting down all goroutines")
-		close(shutdown)
+		close(_shutdown)
 		for len(processing) > 0 {
 			delete(processing, <-done)
 		}
@@ -81,7 +81,7 @@ func (l *ServiceListener) Listen() {
 			if _, ok := processing[serviceID]; !ok {
 				glog.V(1).Info("Spawning a listener for service ", serviceID)
 				processing[serviceID] = nil
-				go l.listenService(shutdown, done, serviceID)
+				go l.listenService(_shutdown, done, serviceID)
 			}
 		}
 
@@ -91,6 +91,8 @@ func (l *ServiceListener) Listen() {
 		case serviceID := <-done:
 			glog.V(2).Info("Cleaning up service ", serviceID)
 			delete(processing, serviceID)
+		case <-shutdown:
+			return
 		}
 	}
 }
@@ -192,16 +194,16 @@ func (l *ServiceListener) stopServiceInstances(svc *service.Service, stateIDs []
 }
 
 func (l *ServiceListener) syncServiceInstances(svc *service.Service, stateIDs []string) {
-	var instances Instances
+	var inst instances
 	for _, ssID := range stateIDs {
 		var state servicestate.ServiceState
 		if err := l.conn.Get(servicepath(svc.Id, ssID), &state); err != nil {
 			glog.Errorf("Could not get service state %s: %s", ssID, err)
 			return
 		}
-		instances.Append(&state)
+		inst.Append(&state)
 	}
-	sort.Sort(&instances)
+	sort.Sort(&inst)
 
 	netInstances := svc.Instances - len(stateIDs)
 	if netInstances > 0 {
@@ -216,8 +218,8 @@ func (l *ServiceListener) syncServiceInstances(svc *service.Service, stateIDs []
 			last        = 0
 			instanceIDs = make([]int, netInstances)
 		)
-		if count := instances.Len(); count > 0 {
-			last = instances.Get(count-1).InstanceID + 1
+		if count := inst.Len(); count > 0 {
+			last = inst.Get(count-1).InstanceID + 1
 		}
 		for i := 0; i < netInstances; i++ {
 			instanceIDs[i] = last + i
@@ -229,7 +231,7 @@ func (l *ServiceListener) syncServiceInstances(svc *service.Service, stateIDs []
 		netInstances = -netInstances
 		// stop oldest first
 		stateIDs := make([]string, netInstances)
-		for i, state := range instances.Range(0, netInstances) {
+		for i, state := range inst.Range(0, netInstances) {
 			stateIDs[i] = state.Id
 		}
 		glog.V(1).Infof("Shutting down %d services for %s (%s)", netInstances, svc.Name, svc.Id)

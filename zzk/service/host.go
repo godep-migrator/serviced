@@ -48,31 +48,29 @@ type HostHandler interface {
 }
 
 type HostListener struct {
-	hostID   string
-	shutdown <-chan interface{}
-	conn     client.Connection
-	handler  HostHandler
+	hostID  string
+	conn    client.Connection
+	handler HostHandler
 }
 
-func NewHostListener(shutdown <-chan interface{}, conn client.Connection, handler HostHandler, hostID string) *HostListener {
+func NewHostListener(conn client.Connection, handler HostHandler, hostID string) *HostListener {
 	return &HostListener{
-		shutdown: shutdown,
-		conn:     conn,
-		handler:  handler,
-		hostID:   hostID,
+		conn:    conn,
+		handler: handler,
+		hostID:  hostID,
 	}
 }
 
-func (l *HostListener) Listen() {
+func (l *HostListener) Listen(shutdown <-chan interface{}) {
 	var (
-		shutdown   = make(chan interface{})
+		_shutdown  = make(chan interface{})
 		done       = make(chan string)
 		processing = make(map[string]interface{})
 	)
 
 	defer func() {
 		glog.Infof("Agent receieved interrupt")
-		close(shutdown)
+		close(_shutdown)
 		for len(processing) > 0 {
 			delete(processing, <-done)
 		}
@@ -100,7 +98,7 @@ func (l *HostListener) Listen() {
 			if _, ok := processing[ssID]; !ok {
 				glog.V(1).Info("Spawning a listener for SSID ", ssID)
 				processing[ssID] = nil
-				go l.listenHostState(shutdown, done, ssID)
+				go l.listenHostState(_shutdown, done, ssID)
 			}
 		}
 
@@ -110,7 +108,7 @@ func (l *HostListener) Listen() {
 		case ssID := <-done:
 			glog.V(2).Info("Cleaning up SSID ", ssID)
 			delete(processing, ssID)
-		case <-l.shutdown:
+		case <-shutdown:
 			return
 		}
 	}
