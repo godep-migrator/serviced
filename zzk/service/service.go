@@ -163,16 +163,8 @@ func (l *ServiceListener) startServiceInstances(svc *service.Service, hosts []*h
 
 		state.HostIP = host.IPAddr
 		state.InstanceID = i
-		if err := l.conn.Create(servicepath(state.ServiceID, state.Id), state); err != nil {
+		if err := addInstance(l.conn, state); err != nil {
 			glog.Errorf("Could not add service instance %s: %s", state.Id, err)
-			return
-		}
-
-		if err := l.conn.Create(hostpath(state.HostID, state.Id), NewHostState(state)); err != nil {
-			glog.Errorf("Could not add service instance %s: %s", state.Id, err)
-			if err := l.conn.Delete(servicepath(state.ServiceID, state.Id)); err != nil {
-				glog.Warningf("Could not remove service instance %s: %s", state.Id, err)
-			}
 			return
 		}
 
@@ -262,4 +254,19 @@ func RemoveService(conn client.Connection, id string) error {
 		return fmt.Errorf("service id required")
 	}
 	return conn.Delete(servicepath(id))
+}
+
+func addInstance(conn client.Connection, state *servicestate.ServiceState) error {
+	spath := servicepath(state.ServiceID, state.Id)
+
+	if err := conn.Create(spath, state); err != nil {
+		return err
+	} else if err := conn.Create(hostpath(state.HostID, state.Id), NewHostState(state)); err != nil {
+		if err := conn.Delete(spath); err != nil {
+			glog.Warningf("Could not remove service instance %s: %s", state.Id, err)
+		}
+		return err
+	}
+
+	return nil
 }
