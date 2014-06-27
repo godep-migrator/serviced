@@ -77,6 +77,79 @@ func (handler *TestHostHandler) UpdateInstance(state *servicestate.ServiceState)
 }
 
 func TestHostListener_Listen(t *testing.T) {
+	conn := client.NewTestConnection()
+	defer conn.Close()
+	handler := NewTestHostHandler()
+	listener := NewHostListener(conn, handler, "test-host-1")
+	shutdown := make(chan interface{})
+	wait := make(chan interface{})
+	go func() {
+		listener.Listen(shutdown)
+		close(wait)
+	}()
+
+	// Create the service
+	svc := &service.Service{
+		Id:        "test-service-1",
+		Endpoints: make([]service.ServiceEndpoint, 1),
+	}
+	if err := UpdateService(conn, svc); err != nil {
+		t.Fatalf("Could not add service %s: %s", svc.Id, err)
+	}
+
+	var states []*servicestate.ServiceState
+	for i := 0; i < 3; i++ {
+		// Create a service instance
+		state, err := servicestate.BuildFromService(svc, listener.hostID)
+		if err != nil {
+			t.Fatalf("Could not generate instance from service %s", svc.Id)
+		} else if err := addInstance(conn, state); err != nil {
+			t.Fatalf("Could not add instance %s from service %s", state.Id, state.ServiceID)
+		}
+		states = append(states, state)
+	}
+
+	// stop 1 instance and verify
+	spath := servicepath(states[0].ServiceID, states[0].Id)
+	var s servicestate.ServiceState
+	eventC, err := conn.GetW(spath, &s)
+	if err != nil {
+		t.Fatalf("Error retrieving watch for %s: %s", spath, err)
+	}
+	<-time.After(3 * time.Second)
+	if err := StopServiceInstance(conn, listener.hostID, states[0].Id); err != nil {
+		t.Fatalf("Could not stop service instance %s: %s", states[0].Id, err)
+	}
+	<-eventC
+	eventC, err = conn.GetW(spath, &s)
+	if err != nil {
+		t.Fatalf("Error retrieving watch for %s: %s", spath, err)
+	}
+	<-eventC
+	if exists, err := conn.Exists(spath); err != nil {
+		t.Fatalf("Error checking the instance %s for service %s: %s", s.Id, s.ServiceID, err)
+	} else if exists {
+		t.Errorf("Instance %s still exists for service %s", s.Id, s.ServiceID)
+	} else if exists, err := conn.Exists(hostpath(listener.hostID, s.Id)); err != nil {
+		t.Fatalf("Error checking the instance %s for host %s: %s", s.Id, listener.hostID, err)
+	} else if exists {
+		t.Errorf("Instance %s still exists for host %s", s.Id, listener.hostID)
+	}
+
+	// shutdown
+	<-time.After(3 * time.Second)
+	close(shutdown)
+	<-wait
+	hpath := hostpath(listener.hostID)
+	if children, err := conn.Children(spath); err != nil {
+		t.Fatalf("Error checking children for %s: %s", spath, err)
+	} else if len(children) > 0 {
+		t.Errorf("Found nodes for %s: %s", spath, children)
+	} else if children, err := conn.Children(hpath); err != nil {
+		t.Fatalf("Error checking children for %s: %s", hpath, err)
+	} else if len(children) > 0 {
+		t.Errorf("Found nodes for %s: %s", hpath, children)
+	}
 }
 
 func TestHostListener_listenHostState_StartAndStop(t *testing.T) {
