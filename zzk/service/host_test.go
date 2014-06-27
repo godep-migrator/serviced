@@ -42,6 +42,7 @@ func (handler *TestHostHandler) StartService(done chan<- interface{}, svc *servi
 	if _, ok := handler.processing[state.Id]; !ok {
 		handler.processing[state.Id] = done
 		handler.states[state.Id] = state
+		state.Started = time.Now()
 		return nil
 	}
 
@@ -78,16 +79,245 @@ func (handler *TestHostHandler) UpdateInstance(state *servicestate.ServiceState)
 func TestHostListener_Listen(t *testing.T) {
 }
 
-func TestHostListener_listenHostState(t *testing.T) {
+func TestHostListener_listenHostState_StartAndStop(t *testing.T) {
+	conn := client.NewTestConnection()
+	defer conn.Close()
+	handler := NewTestHostHandler()
+	listener := NewHostListener(conn, handler, "test-host-1")
+
+	// Create the service
+	svc := &service.Service{
+		Id:        "test-service-1",
+		Endpoints: make([]service.ServiceEndpoint, 1),
+	}
+	if err := UpdateService(conn, svc); err != nil {
+		t.Fatalf("Could not add service %s: %s", svc.Id, err)
+	}
+
+	// Create the service instance
+	state, err := servicestate.BuildFromService(svc, listener.hostID)
+	if err != nil {
+		t.Fatalf("Could not generate instance from service %s", svc.Id)
+	} else if err := addInstance(conn, state); err != nil {
+		t.Fatalf("Could not add instance %s from service %s", state.Id, state.ServiceID)
+	}
+
+	shutdown := make(chan interface{})
+	done := make(chan string)
+	go listener.listenHostState(shutdown, done, state.Id)
+
+	t.Log("Stop the instance and verify restart")
+	var s servicestate.ServiceState
+	spath := servicepath(state.ServiceID, state.Id)
+	eventC, err := conn.GetW(spath, &s)
+	if err != nil {
+		t.Fatalf("Could not add watch to %s: %s", spath, err)
+	}
+
+	// get the start time and stop the service
+	<-eventC
+	eventC, err = conn.GetW(spath, &s)
+	if err != nil {
+		t.Fatalf("Could not add watch to %s: %s", spath, err)
+	}
+	startTime := s.Started
+	stopTime := s.Terminated
+	if err := handler.StopService(&s); err != nil {
+		t.Fatalf("Could not stop instance %s: %s", s.Id, err)
+	}
+
+	// verify the instance stopped and started
+	<-eventC
+	eventC, err = conn.GetW(spath, &s)
+	if err != nil {
+		t.Fatalf("Could not add watch to %s: %s", spath, err)
+	}
+	if stopTime.UnixNano() == s.Terminated.UnixNano() {
+		t.Errorf("Service instance %s not stopped", s.Id)
+	}
+
+	<-eventC
+	if err := conn.Get(spath, &s); err != nil {
+		t.Fatalf("Could not add watch to %s: %s", spath, err)
+	}
+	if startTime.UnixNano() == s.Started.UnixNano() {
+		t.Errorf("Service instance %s not started", s.Id)
+	}
+
+	// stop the service instance and verify
+	StopServiceInstance(conn, listener.hostID, s.Id)
+	if ssID := <-done; ssID != state.Id {
+		t.Errorf("MISMATCH: instances do not match! (%s != %s)", state.Id, ssID)
+	} else if exists, err := conn.Exists(spath); err != nil {
+		t.Fatalf("Error checking the instance %s for service %s: %s", s.Id, s.ServiceID, err)
+	} else if exists {
+		t.Errorf("Instance %s still exists for service %s", s.Id, s.ServiceID)
+	} else if exists, err := conn.Exists(hostpath(listener.hostID, s.Id)); err != nil {
+		t.Fatalf("Error checking the instance %s for host %s: %s", s.Id, listener.hostID, err)
+	} else if exists {
+		t.Errorf("Instance %s still exists for host %s", s.Id, listener.hostID)
+	}
+}
+
+func TestHostListener_listenHostState_AttachAndDelete(t *testing.T) {
+	conn := client.NewTestConnection()
+	defer conn.Close()
+	handler := NewTestHostHandler()
+	listener := NewHostListener(conn, handler, "test-host-1")
+
+	// Create the service
+	svc := &service.Service{
+		Id:        "test-service-1",
+		Endpoints: make([]service.ServiceEndpoint, 1),
+	}
+	if err := UpdateService(conn, svc); err != nil {
+		t.Fatalf("Could not add service %s: %s", svc.Id, err)
+	}
+
+	// Create the service instance
+	state, err := servicestate.BuildFromService(svc, listener.hostID)
+	if err != nil {
+		t.Fatalf("Could not generate instance from service %s", svc.Id)
+	} else if err := addInstance(conn, state); err != nil {
+		t.Fatalf("Could not add instance %s from service %s", state.Id, state.ServiceID)
+	}
+
+	t.Log("Start the instance and verify attach")
+	spath := servicepath(state.ServiceID, state.Id)
+	if err := handler.StartService(make(chan interface{}), svc, state); err != nil {
+		t.Fatalf("Could not start instance %s: %s", state.Id, err)
+	}
+	defer handler.StopService(state)
+	// Update instance with the start time
+	if err := conn.Set(spath, state); err != nil {
+		t.Fatalf("Could not update instance %s: %s", state.Id, err)
+	}
+
+	shutdown := make(chan interface{})
+	done := make(chan string)
+	go listener.listenHostState(shutdown, done, state.Id)
+
+	// Remove the instance and verify stopped
+	<-time.After(3 * time.Second)
+	listener.removeInstance(state)
+	if ssID := <-done; ssID != state.Id {
+		t.Errorf("MISMATCH: instances do not match! (%s != %s)", state.Id, ssID)
+	} else if exists, err := conn.Exists(spath); err != nil {
+		t.Fatalf("Error checking the instance %s for service %s: %s", state.Id, state.ServiceID, err)
+	} else if exists {
+		t.Errorf("Instance %s still exists for service %s", state.Id, state.ServiceID)
+	} else if exists, err := conn.Exists(hostpath(listener.hostID, state.Id)); err != nil {
+		t.Fatalf("Error checking the instance %s for host %s: %s", state.Id, listener.hostID, err)
+	} else if exists {
+		t.Errorf("Instance %s still exists for host %s", state.Id, listener.hostID)
+	}
+}
+
+func TestHostListener_listenHostState_Shutdown(t *testing.T) {
+	conn := client.NewTestConnection()
+	defer conn.Close()
+	handler := NewTestHostHandler()
+	listener := NewHostListener(conn, handler, "test-host-1")
+
+	// Create the service
+	svc := &service.Service{
+		Id:        "test-service-1",
+		Endpoints: make([]service.ServiceEndpoint, 1),
+	}
+	if err := UpdateService(conn, svc); err != nil {
+		t.Fatalf("Could not add service %s: %s", svc.Id, err)
+	}
+
+	// Create the service instance
+	state, err := servicestate.BuildFromService(svc, listener.hostID)
+	if err != nil {
+		t.Fatalf("Could not generate instance from service %s", svc.Id)
+	} else if err := addInstance(conn, state); err != nil {
+		t.Fatalf("Could not add instance %s from service %s", state.Id, state.ServiceID)
+	}
+
+	shutdown := make(chan interface{})
+	done := make(chan string)
+	go listener.listenHostState(shutdown, done, state.Id)
+
+	// wait 3 seconds and shutdown
+	t.Log("Shutdown and verify the instance")
+	<-time.After(3)
+	close(shutdown)
+	spath := servicepath(state.ServiceID, state.Id)
+	if ssID := <-done; ssID != state.Id {
+		t.Errorf("MISMATCH: instances do not match! (%s != %s)", state.Id, ssID)
+	} else if exists, err := conn.Exists(spath); err != nil {
+		t.Fatalf("Error checking the instance %s for service %s: %s", state.Id, state.ServiceID, err)
+	} else if exists {
+		t.Errorf("Instance %s still exists for service %s", state.Id, state.ServiceID)
+	} else if exists, err := conn.Exists(hostpath(listener.hostID, state.Id)); err != nil {
+		t.Fatalf("Error checking the instance %s for host %s: %s", state.Id, listener.hostID, err)
+	} else if exists {
+		t.Errorf("Instance %s still exists for host %s", state.Id, listener.hostID)
+	}
 }
 
 func TestHostListener_pingInstance(t *testing.T) {
-}
+	conn := client.NewTestConnection()
+	defer conn.Close()
+	handler := NewTestHostHandler()
+	listener := NewHostListener(conn, handler, "test-host-1")
 
-func TestHostListener_startInstance(t *testing.T) {
-}
+	svc := &service.Service{
+		Id:        "test-service-1",
+		Endpoints: make([]service.ServiceEndpoint, 1),
+	}
 
-func TestHostListener_attachInstance(t *testing.T) {
+	// Create the service instance
+	state, err := servicestate.BuildFromService(svc, listener.hostID)
+	if err != nil {
+		t.Fatalf("Could not generate instance from service %s", svc.Id)
+	} else if err := addInstance(conn, state); err != nil {
+		t.Fatalf("Could not add instance %s from service %s", state.Id, state.ServiceID)
+	}
+
+	done := make(chan interface{})
+	wait := make(chan interface{})
+	go func() {
+		handler.StartService(done, svc, state)
+		listener.pingInstance(done, time.Second, state)
+		close(wait)
+	}()
+
+	var (
+		s1, s2 servicestate.ServiceState
+	)
+	// Wait 3 seconds and update the state
+	<-time.After(3 * time.Second)
+	t.Logf("Updating instance %s", state.Id)
+	spath := servicepath(state.ServiceID, state.Id)
+	eventC, err := conn.GetW(spath, &s1)
+	if err != nil {
+		t.Fatalf("Could not add watch to path %s: %s", spath, err)
+	}
+	s1.DockerID = "DOCKERCONTAINERID"
+	handler.UpdateInstance(&s1)
+
+	for {
+		select {
+		case <-eventC:
+			// Receieved event that the instance was changed
+			t.Logf("Notified that instance %s changed\n", state.Id)
+			if err := conn.Get(spath, &s2); err != nil {
+				t.Fatalf("Could not get service state %s: %s", state.Id, err)
+			}
+			if s2.DockerID != s1.DockerID {
+				t.Errorf("MISMATCH: Docker IDs do not match ('%s' != '%s')", s1.DockerID, s2.DockerID)
+			}
+			handler.StopService(&s2)
+			eventC = nil
+		case <-wait:
+			// Process ended
+			t.Logf("Ping stopped for instance %s\n", state.Id)
+			return
+		}
+	}
 }
 
 func TestHostListener_removeInstance(t *testing.T) {

@@ -120,11 +120,7 @@ func (l *HostListener) listenHostState(shutdown <-chan interface{}, done chan<- 
 		done <- ssID
 	}()
 
-	var (
-		attached bool
-		procDone <-chan interface{}
-	)
-
+	var processDone <-chan interface{}
 	for {
 		var hs HostState
 		event, err := l.conn.GetW(hostpath(l.hostID, ssID), &hs)
@@ -154,48 +150,49 @@ func (l *HostListener) listenHostState(shutdown <-chan interface{}, done chan<- 
 			return
 		}
 
-		glog.V(2).Infof("Processing %s (%s); Desired State: %s", svc.Name, svc.Id, hs.DesiredState)
+		glog.V(2).Infof("Processing %s (%s); Desired State: %d", svc.Name, svc.Id, hs.DesiredState)
 		switch hs.DesiredState {
 		case service.SVCRun:
 			var err error
 
 			if state.Started.UnixNano() <= state.Terminated.UnixNano() {
-				procDone, err = l.startInstance(&svc, &state)
-			} else if !attached {
-				procDone, err = l.attachInstance(&svc, &state)
+				processDone, err = l.startInstance(&svc, &state)
+			} else if processDone == nil {
+				processDone, err = l.attachInstance(&svc, &state)
 			}
 			if err != nil {
 				glog.Errorf("Error trying to start or attach to service instance %s: %s", state.Id, err)
 				l.stopInstance(&state)
 				return
 			}
-			attached = true
 		case service.SVCStop:
-			if state.Started.UnixNano() >= state.Terminated.UnixNano() {
-				if attached {
-					l.detachInstance(procDone, &state)
-				} else {
-					l.stopInstance(&state)
-				}
-				return
+			if processDone != nil {
+				l.detachInstance(processDone, &state)
+			} else {
+				l.stopInstance(&state)
 			}
+			return
 		default:
 			glog.V(2).Infof("Unhandled service %s (%s)", svc.Name, svc.Id)
 		}
 
 		select {
-		case <-procDone:
+		case <-processDone:
 			glog.V(2).Info("Process ended for instance ", hs.ID)
+			processDone = nil
 		case e := <-event:
-			glog.V(3).Infof("Receieved event: %v", e)
-			switch e.Type {
-			case client.EventNodeDeleted:
+			glog.V(3).Info("Received event: ", e)
+			if e.Type == client.EventNodeDeleted {
 				// node was deleted, so process was terminated
 				return
 			}
 		case <-shutdown:
-			glog.V(2).Infof("Host instance %s received signal to shutdown", hs.ID)
-			// Stop service instance
+			glog.V(0).Infof("Host instance %s received signal to shutdown", hs.ID)
+			if processDone != nil {
+				l.detachInstance(processDone, &state)
+			} else {
+				l.stopInstance(&state)
+			}
 			return
 		}
 	}
@@ -228,8 +225,14 @@ func (l *HostListener) startInstance(svc *service.Service, state *servicestate.S
 	if err := l.handler.StartService(done, svc, state); err != nil {
 		return nil, err
 	}
-	go l.pingInstance(done, 5*time.Second, state)
-	return done, nil
+
+	wait := make(chan interface{})
+	go func() {
+		defer close(wait)
+		l.pingInstance(done, 5*time.Second, state)
+	}()
+
+	return wait, nil
 }
 
 func (l *HostListener) attachInstance(svc *service.Service, state *servicestate.ServiceState) (<-chan interface{}, error) {
@@ -237,8 +240,14 @@ func (l *HostListener) attachInstance(svc *service.Service, state *servicestate.
 	if err := l.handler.AttachService(done, svc, state); err != nil {
 		return nil, err
 	}
-	go l.pingInstance(done, 5*time.Second, state)
-	return done, nil
+
+	wait := make(chan interface{})
+	go func() {
+		defer close(wait)
+		l.pingInstance(done, 5*time.Second, state)
+	}()
+
+	return wait, nil
 }
 
 func (l *HostListener) removeInstance(state *servicestate.ServiceState) error {
