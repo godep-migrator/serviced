@@ -187,7 +187,7 @@ func (l *HostListener) listenHostState(shutdown <-chan interface{}, done chan<- 
 				return
 			}
 		case <-shutdown:
-			glog.V(0).Infof("Host instance %s received signal to shutdown", hs.ID)
+			glog.V(2).Infof("Host instance %s received signal to shutdown", hs.ID)
 			if processDone != nil {
 				l.detachInstance(processDone, &state)
 			} else {
