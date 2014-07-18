@@ -1,4 +1,4 @@
-function NavbarControl($scope, $rootScope, $http, $cookies, $location, $route, $translate, $notification, authService, $modalService) {
+function NavbarControl($scope, $rootScope, $http, $cookies, $location, $route, $translate, $notification, authService, $modalService, resourcesService) {
     $scope.name = 'navbar';
     $scope.brand = { url: '#/entry', label: 'brand_cp' };
 
@@ -92,6 +92,18 @@ function NavbarControl($scope, $rootScope, $http, $cookies, $location, $route, $
     $("#notifications").css({
         "width": navWidth + "px",
         "left": (windowWidth * 0.5) - (navWidth * 0.5)
+    });
+
+    // get version number    
+    resourcesService.get_version(function(data){
+        $scope.servicedVer = data;
+
+        $(".helpIcon").popover({
+            trigger: "click",
+            placement: "bottom",
+            html: true,
+            content: "Control Center version "+ data.Version +" build "+ data.Build,
+        });
     });
 
 }

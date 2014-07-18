@@ -35,6 +35,8 @@
     "cores_required": "CPU Cores Required",
     "memory_required": "Memory Required",
 
+    "about": "About",
+
     "file_name": "File Name",
     "modified": "Modified",
     "actions": "Actions",

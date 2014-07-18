@@ -9,8 +9,8 @@ function EntryControl($scope, authService, resourcesService) {
                 $('#addApp').modal('show');
             }
         });
-    }
+    };
     resourcesService.get_version(function(data){
-        $scope['version'] = data.Detail;
+        $scope.version = data.Version;
     });
 }
