@@ -98,11 +98,15 @@ function NavbarControl($scope, $rootScope, $http, $cookies, $location, $route, $
     resourcesService.get_version(function(data){
         $scope.servicedVer = data;
 
+        var content = "<div style='font-size:1.4em;'>Control Center</div> version "+ data.Version;
+        if(data.Build && data.Build !== "0") content += " build "+ data.Build;
+
         $(".helpIcon").popover({
-            trigger: "click",
-            placement: "bottom",
+            trigger: "hover",
+            placement: "left",
             html: true,
-            content: "Control Center version "+ data.Version +" build "+ data.Build,
+            content: content,
+            template: '<div class="popover help" role="tooltip"><div class="arrow"></div><h3 class="popover-title"></h3><div class="popover-content"></div></div>'
         });
     });
 

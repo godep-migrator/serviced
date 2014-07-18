@@ -53,6 +53,7 @@ a:hover, a:active, a:focus,
 .btn-link:hover, .btn-link:active, .btn-link:focus {
     color: #404040;
     text-decoration: none;
+    outline: 0;
 }
 
 .link {
@@ -251,6 +252,14 @@ table .btn,
     color: #EEE;
     font-size: .9em;
     line-height: 1.6em;
+}
+
+.navbar-zen .navbar-right .helpIcon:hover {
+    background-color: inherit;
+}
+.navbar-zen .navbar-right .help.popover {
+    width: 200px;
+    color: #666;
 }
 
 .nav > li > .item {
