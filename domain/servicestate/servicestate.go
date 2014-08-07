@@ -37,12 +37,23 @@ type ServiceState struct {
 	Scheduled   time.Time
 	Terminated  time.Time
 	Started     time.Time
+	Paused      bool
 	PortMapping map[string][]domain.HostIPAndPort // protocol -> container port (internal) -> host port (external)
 	// remove list?  PortMapping:map[6379/tcp:[{HostIP:0.0.0.0 HostPort:49195}]]
 	//  i.e. redis:  PortMapping:map[6379/tcp: {HostIP:0.0.0.0 HostPort:49195} ]
 	Endpoints  []service.ServiceEndpoint
 	HostIP     string
 	InstanceID int
+}
+
+// IsRunning returns true when a service is currently running
+func (ss *ServiceState) IsRunning() bool {
+	return ss.Started.UnixNano() > ss.Terminated.UnixNano()
+}
+
+// IsPaused returns true when a service is paused or is not running
+func (ss *ServiceState) IsPaused() bool {
+	return !ss.IsRunning() || ss.Paused
 }
 
 func (ss *ServiceState) evalPortTemplate(portTemplate string) (int, error) {

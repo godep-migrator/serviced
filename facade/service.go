@@ -310,6 +310,30 @@ func (f *Facade) StartService(ctx datastore.Context, serviceId string) error {
 	return f.walkServices(ctx, serviceId, visitor)
 }
 
+// pause the provided service
+func (f *Facade) PauseService(ctx datastore.Context, serviceID string) error {
+	glog.V(4).Infof("Facade.PauseService %s", serviceID)
+	// f will traverse all the services
+	err := f.validateService(ctx, serviceID)
+	glog.V(4).Infof("Facace.PauseService validate service result %v", err)
+	if err != nil {
+		return err
+	}
+
+	visitor := func(svc *service.Service) error {
+		svc.DesiredState = service.SVCPause
+		if err := f.updateService(ctx, svc); err != nil {
+			return err
+		}
+		glog.V(4).Infof("Facade.PauseService update service %v, %v: %v", svc.Name, svc.ID, err)
+		// block until all of the instances are paused (or timeout)
+		return zkAPI(f).pauseService(svc)
+	}
+
+	// traverse all the services
+	return f.walkServices(ctx, serviceID, visitor)
+}
+
 func (f *Facade) StopService(ctx datastore.Context, id string) error {
 	glog.V(0).Info("Facade.StopService id=", id)
 
@@ -825,6 +849,7 @@ func getZKAPI(f *Facade) zkfuncs {
 type zkfuncs interface {
 	updateService(svc *service.Service) error
 	removeService(svc *service.Service) error
+	pauseService(svc *service.Service) error
 	getSvcStates(poolID string, serviceStates *[]*servicestate.ServiceState, serviceIds ...string) error
 	RegisterHost(h *host.Host) error
 	UnregisterHost(h *host.Host) error
@@ -864,6 +889,33 @@ func (z *zkf) removeService(svc *service.Service) error {
 		err = zkservice.RemoveService(cancel, poolBasedConn, svc.ID)
 	}()
 
+	go func() {
+		defer close(cancel)
+		<-time.After(30 * time.Second)
+	}()
+
+	<-done
+	return err
+}
+
+func (z *zkf) pauseService(svc *service.Service) error {
+	poolBasedConn, err := zzk.GetBasePathConnection(zzk.GeneratePoolPath(svc.PoolID))
+	if err != nil {
+		glog.Errorf("Error getting a connection based on pool %s: %s", svc.PoolID, err)
+		return err
+	}
+
+	var (
+		cancel = make(chan interface{})
+		done   = make(chan interface{})
+	)
+
+	go func() {
+		defer close(done)
+		err = zkservice.PausedService(cancel, poolBasedConn, svc.ID)
+	}()
+
+	// TODO: make me configurable
 	go func() {
 		defer close(cancel)
 		<-time.After(30 * time.Second)

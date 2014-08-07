@@ -84,8 +84,8 @@ func (node *ServiceNode) SetVersion(version interface{}) { node.version = versio
 
 // ServiceStateNode is the zookeeper client node for service states
 type ServiceStateNode struct {
-	ServiceState *servicestate.ServiceState
-	version      interface{}
+	*servicestate.ServiceState
+	version interface{}
 }
 
 // Version implements client.Node
@@ -150,6 +150,8 @@ func (l *ServiceListener) Spawn(shutdown <-chan interface{}, serviceID string) {
 			l.stop(rss)
 		case service.SVCRun:
 			l.sync(&svc, rss)
+		case service.SVCPause:
+			l.pause(rss)
 		default:
 			glog.Warningf("Unexpected desired state %d for service %s (%s)", svc.DesiredState, svc.Name, svc.ID)
 		}
@@ -186,6 +188,14 @@ func (l *ServiceListener) sync(svc *service.Service, rss []*dao.RunningService) 
 	// lowest instance ID first and start instances with the greatest instance
 	// ID last.
 	sort.Sort(instances(rss))
+
+	// resume any paused running services
+	for _, state := range rss {
+		// resumeInstance updates the service state ONLY if it has a PAUSED DesiredState
+		if err := resumeInstance(l.conn, state.HostID, state.ID); err != nil {
+			glog.Warningf("Could not resume paused service instance %s on host %s: %s", state.ID, state.HostID, err)
+		}
+	}
 
 	// if the service has a change option for restart all on changed, stop all
 	// instances and wait for the nodes to stop.  Once all service instances
@@ -267,6 +277,17 @@ func (l *ServiceListener) stop(rss []*dao.RunningService) {
 	}
 }
 
+func (l *ServiceListener) pause(rss []*dao.RunningService) {
+	for _, state := range rss {
+		// pauseInstance updates the service state ONLY if it has a RUN DesiredState
+		if err := pauseInstance(l.conn, state.HostID, state.ID); err != nil {
+			glog.Warningf("Could not pause service instance %s for service %s (%s): %s", state.ID, state.ServiceID, state.Name, err)
+			continue
+		}
+		glog.V(2).Infof("Pausing service instance %s for service %s on host %s", state.ID, state.ServiceID, state.HostID)
+	}
+}
+
 // StartService schedules a service to start
 func StartService(conn client.Connection, serviceID string) error {
 	glog.Infof("Scheduling service %s to start", serviceID)
@@ -278,6 +299,38 @@ func StartService(conn client.Connection, serviceID string) error {
 	}
 	node.Service.DesiredState = service.SVCRun
 	return conn.Set(path, &node)
+}
+
+// PausedService blocks untils a service is paused
+func PausedService(cancel <-chan interface{}, conn client.Connection, serviceID string) error {
+	for {
+		stateIDs, event, err := conn.ChildrenW(servicepath(serviceID))
+		if err != nil {
+			return err
+		}
+
+		var state servicestate.ServiceState
+		for _, stateID := range stateIDs {
+			// Check if the service instance was paused
+			if err := conn.Get(servicepath(serviceID, stateID), &ServiceStateNode{ServiceState: &state}); err != nil {
+				return err
+			}
+			if !state.IsPaused() {
+				break
+			}
+		}
+		if state.IsPaused() {
+			return nil
+		}
+
+		select {
+		case <-event:
+			// pass
+		case <-cancel:
+			glog.Infof("Gave up trying to pause service %s", serviceID)
+			return ErrShutdown
+		}
+	}
 }
 
 // StopService schedules a service to stop

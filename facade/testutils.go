@@ -64,6 +64,10 @@ func (z *zkMock) removeService(svc *service.Service) error {
 	return nil
 }
 
+func (z *zkMock) pauseService(svc *service.Service) error {
+	return nil
+}
+
 func (z *zkMock) getSvcStates(poolID string, serviceStates *[]*servicestate.ServiceState, serviceIds ...string) error {
 	return nil
 }

@@ -79,6 +79,20 @@ func (a *api) GetServiceStates(serviceID string) ([]*servicestate.ServiceState, 
 	return states, nil
 }
 
+func (a *api) GetServiceStatus(rs RunningService) (int, error) {
+	client, err := a.connectDAO()
+	if err != nil {
+		return 0, err
+	}
+
+	var status int
+	if err := client.GetServiceStatus(*rs.ServiceState, &status); err != nil {
+		return 0, err
+	}
+
+	return status, nil
+}
+
 // Gets the service definition identified by its service ID
 func (a *api) GetService(id string) (*service.Service, error) {
 	client, err := a.connectDAO()

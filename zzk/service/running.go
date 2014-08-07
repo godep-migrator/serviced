@@ -5,6 +5,7 @@
 package service
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/control-center/serviced/coordinator/client"
@@ -12,6 +13,20 @@ import (
 	"github.com/control-center/serviced/domain/service"
 	"github.com/control-center/serviced/domain/servicestate"
 	"github.com/control-center/serviced/zzk"
+)
+
+const (
+	Unknown = iota
+	Stopped
+	Starting
+	Running
+	Pausing
+	Paused
+	Stopping
+)
+
+var (
+	ErrUnknownState = errors.New("unknown state")
 )
 
 // NewRunningService instantiates a RunningService object from a given service and service state
@@ -141,4 +156,58 @@ func LoadRunningServices(conn client.Connection) ([]*dao.RunningService, error) 
 	}
 
 	return LoadRunningServicesByService(conn, ids...)
+}
+
+// GetServiceStatus computes the state of the running service
+func GetServiceStatus(conn client.Connection, serviceID string, stateID string) (int, error) {
+	var status int
+
+	// Set the state based on the service state object
+	var stateNode ServiceStateNode
+	if err := conn.Get(servicepath(serviceID, stateID), &stateNode); err != nil && err != client.ErrNoNode {
+		return Unknown, err
+	} else if !stateNode.IsRunning() {
+		status = Stopped
+	} else if stateNode.IsPaused() {
+		status = Paused
+	} else {
+		status = Running
+	}
+
+	// Set the state based on the host state object
+	var hostState HostState
+	if err := conn.Get(hostpath(stateNode.ServiceID, stateNode.ID), &hostState); err != nil && err != client.ErrNoNode {
+		return Unknown, err
+	} else if hostState.DesiredState == service.SVCStop {
+		switch status {
+		case Running, Paused:
+			status = Stopping
+		case Stopped:
+			// pass
+		default:
+			return Unknown, ErrUnknownState
+		}
+	} else if hostState.DesiredState == service.SVCRun {
+		switch status {
+		case Stopped, Paused:
+			status = Starting
+		case Running:
+			// pass
+		default:
+			return Unknown, ErrUnknownState
+		}
+	} else if hostState.DesiredState == service.SVCPause {
+		switch status {
+		case Running:
+			status = Pausing
+		case Paused:
+			// pass
+		default:
+			return Unknown, ErrUnknownState
+		}
+	} else {
+		return Unknown, ErrUnknownState
+	}
+
+	return status, nil
 }

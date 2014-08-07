@@ -14,7 +14,6 @@ import (
 	"github.com/control-center/serviced/domain/servicestate"
 	"github.com/control-center/serviced/facade"
 	"github.com/control-center/serviced/node"
-	"github.com/control-center/serviced/utils"
 	"github.com/control-center/serviced/volume"
 	"github.com/zenoss/glog"
 
@@ -41,11 +40,6 @@ var (
 	getCurrentUser = user.Current
 )
 
-// runServiceCommand attaches to a service state container and executes an arbitrary bash command
-var runServiceCommand = func(state *servicestate.ServiceState, command string) ([]byte, error) {
-	return utils.AttachAndRun(state.DockerID, []string{command})
-}
-
 type DistributedFileSystem struct {
 	sync.Mutex
 	client dao.ControlPlane
@@ -60,26 +54,6 @@ func NewDistributedFileSystem(client dao.ControlPlane, facade *facade.Facade) (*
 	}, nil
 }
 
-// Pauses a running service
-func (d *DistributedFileSystem) Pause(service *service.Service, state *servicestate.ServiceState) error {
-	if output, err := runServiceCommand(state, service.Snapshot.Pause); err != nil {
-		errmsg := fmt.Sprintf("output: \"%s\", err: %s", output, err)
-		glog.V(2).Infof("DistributedFileSystem.Pause service=%+v err=%s", service, err)
-		return errors.New(errmsg)
-	}
-	return nil
-}
-
-// Resumes a paused service
-func (d *DistributedFileSystem) Resume(service *service.Service, state *servicestate.ServiceState) error {
-	if output, err := runServiceCommand(state, service.Snapshot.Resume); err != nil {
-		errmsg := fmt.Sprintf("output: \"%s\", err: %s", output, err)
-		glog.V(2).Infof("DistributedFileSystem.Resume service=%+v err=%s", service, err)
-		return errors.New(errmsg)
-	}
-	return nil
-}
-
 // Snapshots the DFS
 func (d *DistributedFileSystem) Snapshot(tenantId string) (string, error) {
 	// Get the service
@@ -89,49 +63,20 @@ func (d *DistributedFileSystem) Snapshot(tenantId string) (string, error) {
 		return "", err
 	}
 
-	iamRoot := false
-	warnedAboutNonRoot := false
-
-	// Only the root user can pause and resume services
-	if whoami, err := getCurrentUser(); err != nil {
-		glog.V(2).Infof("DistributedFileSystem.Snapshot service=%+v err=%s", myService.ID, err)
-		return "", err
-	} else if USER_ROOT == whoami.Username {
-		iamRoot = true
-	}
-
 	var servicesList []*service.Service
 	if err := d.client.GetServices(unused, &servicesList); err != nil {
 		glog.V(2).Infof("DistributedFileSystem.Snapshot service=%+v err=%s", myService.ID, err)
 		return "", err
 	}
 
-	for _, service := range servicesList {
-		if service.Snapshot.Pause == "" || service.Snapshot.Resume == "" {
-			continue
-		}
-
-		var states []*servicestate.ServiceState
-		if err := d.client.GetServiceStates(service.ID, &states); err != nil {
-			glog.V(2).Infof("DistributedFileSystem.Snapshot service=%+v, err=%s", myService.ID, err)
-			return "", err
-		}
-
-		// Pause all running service states
-		for i, state := range states {
-			glog.V(3).Infof("DEBUG states[%d]: service:%+v state:%+v", i, myService.ID, state.DockerID)
-			if state.DockerID != "" {
-				if iamRoot {
-					err := d.Pause(service, state)
-					defer d.Resume(service, state) // resume service state when snapshot is done
-					if err != nil {
-						glog.V(2).Infof("DistributedFileSystem.Snapshot service=%+v err=%s", service.ID, err)
-						return "", fmt.Errorf("failed to pause \"%s\" (%s): %s", service.Name, service.ID, err)
-					}
-				} else if !warnedAboutNonRoot {
-					warnedAboutNonRoot = true
-					glog.Warningf("Unable to pause/resume service - User is not %s", USER_ROOT)
-				}
+	// Pause all running services
+	for _, svc := range servicesList {
+		if svc.DesiredState == service.SVCRun {
+			defer d.facade.StartService(datastore.Get(), svc.ID)
+			if err := d.facade.PauseService(datastore.Get(), svc.ID); err != nil {
+				err = fmt.Errorf("could not pause %s (%s): %s", svc.Name, svc.ID, err)
+				glog.V(2).Infof("DistributedFileSystem.Snapshot service=%+v err=%s", svc.ID, err)
+				return "", err
 			}
 		}
 	}
@@ -155,14 +100,14 @@ func (d *DistributedFileSystem) Snapshot(tenantId string) (string, error) {
 
 	tag := parts[1]
 
-	// Add tags to the images
-	if err := d.tag(tenantId, DOCKER_LATEST, tag); err != nil {
+	// Add snapshot to the volume
+	if err := theVolume.Snapshot(label); err != nil {
 		glog.V(2).Infof("DistributedFileSystem.Snapshot service=%+v err=%s", myService.ID, err)
 		return "", err
 	}
 
-	// Add snapshot to the volume
-	if err := theVolume.Snapshot(label); err != nil {
+	// Add tags to the images
+	if err := d.tag(tenantId, DOCKER_LATEST, tag); err != nil {
 		glog.V(2).Infof("DistributedFileSystem.Snapshot service=%+v err=%s", myService.ID, err)
 		return "", err
 	}
