@@ -367,10 +367,13 @@ func (c *ServicedCli) cmdServiceStatus(ctx *cli.Context) {
 			}
 
 			if svc.Instances > 0 && len(statemap) == 0 {
-				if svc.DesiredState == service.SVCStop {
-					lines[iid]["Status"] = dao.Stopped.String()
-				} else {
+				switch svc.DesiredState {
+				case service.SVCRun:
 					lines[iid]["Status"] = dao.Scheduled.String()
+				case service.SVCPause:
+					lines[iid]["Status"] = dao.Paused.String()
+				case service.SVCStop:
+					lines[iid]["Status"] = dao.Stopped.String()
 				}
 			}
 

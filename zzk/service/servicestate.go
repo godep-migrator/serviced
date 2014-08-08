@@ -106,9 +106,11 @@ func getStatus(conn client.Connection, state *servicestate.ServiceState) (dao.St
 
 	// Set the state based on the host state object
 	var hostState HostState
-	if err := conn.Get(hostpath(state.ServiceID, state.ID), &hostState); err != nil && err != client.ErrNoNode {
+	if err := conn.Get(hostpath(state.HostID, state.ID), &hostState); err != nil && err != client.ErrNoNode {
 		return dao.Status{}, err
-	} else if hostState.DesiredState == service.SVCStop {
+	}
+
+	if hostState.DesiredState == service.SVCStop {
 		switch status {
 		case dao.Running, dao.Paused:
 			status = dao.Stopping
@@ -132,7 +134,7 @@ func getStatus(conn client.Connection, state *servicestate.ServiceState) (dao.St
 		switch status {
 		case dao.Running:
 			status = dao.Pausing
-		case dao.Paused:
+		case dao.Paused, dao.Stopped:
 			// pass
 		default:
 			return dao.Status{}, ErrUnknownState
