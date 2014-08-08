@@ -85,12 +85,12 @@ func (a *api) GetServiceStatus(serviceID string) (map[*servicestate.ServiceState
 		return nil, err
 	}
 
-	statemap := make(map[*servicestate.ServiceState]dao.Status)
-	if err := client.GetServiceStatus(serviceID, &statemap); err != nil {
+	var status map[*servicestate.ServiceState]dao.Status
+	if err := client.GetServiceStatus(serviceID, &status); err != nil {
 		return nil, err
 	}
 
-	return statemap, nil
+	return status, nil
 }
 
 // Gets the service definition identified by its service ID

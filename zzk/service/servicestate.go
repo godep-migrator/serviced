@@ -67,28 +67,23 @@ func UpdateServiceState(conn client.Connection, state *servicestate.ServiceState
 
 // GetServiceStatus creates a map of service states to their corresponding status
 func GetServiceStatus(conn client.Connection, serviceID string) (map[*servicestate.ServiceState]dao.Status, error) {
-	stateIDs, err := conn.Children(servicepath(serviceID))
+	states, err := GetServiceStates(conn, serviceID)
 	if err != nil {
-		glog.Errorf("Could not look up states of service %s: %s", serviceID, err)
+		glog.Errorf("Could not get states for service %s: %s", serviceID, err)
 		return nil, err
 	}
 
-	statusmap := make(map[*servicestate.ServiceState]dao.Status)
-	for _, stateID := range stateIDs {
-		var state ServiceStateNode
-		if err := conn.Get(servicepath(serviceID, stateID), &state); err != nil {
-			glog.Errorf("Error looking up service instance %s: %s", stateID, err)
-			return nil, err
-		}
-		status, err := getStatus(conn, state.ServiceState)
+	stats := make(map[*servicestate.ServiceState]dao.Status)
+	for _, state := range states {
+		status, err := getStatus(conn, state)
 		if err != nil {
-			glog.Errorf("Error looking up state for service instance %s: %s", stateID, err)
+			glog.Errorf("Error looking up status %s for service %s: %s", state.ID, serviceID, err)
 			return nil, err
 		}
-		statusmap[state.ServiceState] = status
+		stats[state] = status
 	}
 
-	return statusmap, nil
+	return stats, err
 }
 
 // getStatus computes the status of a service state

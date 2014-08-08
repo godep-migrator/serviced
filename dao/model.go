@@ -78,12 +78,12 @@ type RunningService struct {
 }
 
 type Status struct {
-	key   int
-	value string
+	Key   int
+	Value string
 }
 
 func (s Status) String() string {
-	return s.value
+	return s.Value
 }
 
 var (
