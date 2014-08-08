@@ -56,6 +56,14 @@ func (ss *ServiceState) IsPaused() bool {
 	return !ss.IsRunning() || ss.Paused
 }
 
+// Uptime returns the time that the container is running in seconds
+func (ss *ServiceState) Uptime() time.Duration {
+	if ss.IsRunning() {
+		return time.Since(ss.Started)
+	}
+	return 0
+}
+
 func (ss *ServiceState) evalPortTemplate(portTemplate string) (int, error) {
 	t := template.Must(template.New("PortTemplate").Funcs(funcmap).Parse(portTemplate))
 	b := bytes.Buffer{}

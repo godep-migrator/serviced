@@ -82,18 +82,6 @@ func (node *ServiceNode) Version() interface{} { return node.version }
 // SetVersion implements client.Node
 func (node *ServiceNode) SetVersion(version interface{}) { node.version = version }
 
-// ServiceStateNode is the zookeeper client node for service states
-type ServiceStateNode struct {
-	*servicestate.ServiceState
-	version interface{}
-}
-
-// Version implements client.Node
-func (node *ServiceStateNode) Version() interface{} { return node.version }
-
-// SetVersion implements client.Node
-func (node *ServiceStateNode) SetVersion(version interface{}) { node.version = version }
-
 // ServiceHandler handles all non-zookeeper interactions required by the service
 type ServiceHandler interface {
 	SelectHost(*service.Service) (*host.Host, error)
@@ -407,39 +395,4 @@ func RemoveService(cancel <-chan interface{}, conn client.Connection, serviceID 
 
 	// Delete the service
 	return conn.Delete(servicepath(serviceID))
-}
-
-// GetServiceState gets a service state
-func GetServiceState(conn client.Connection, state *servicestate.ServiceState, serviceID string, stateID string) error {
-	return conn.Get(servicepath(serviceID, stateID), &ServiceStateNode{ServiceState: state})
-}
-
-// GetServiceStates gets all service states for a particular service
-func GetServiceStates(conn client.Connection, serviceIDs ...string) (states []*servicestate.ServiceState, err error) {
-	for _, serviceID := range serviceIDs {
-		stateIDs, err := conn.Children(servicepath(serviceID))
-		if err != nil {
-			return nil, err
-		}
-
-		for _, stateID := range stateIDs {
-			var state servicestate.ServiceState
-			if err := GetServiceState(conn, &state, serviceID, stateID); err != nil {
-				return nil, err
-			}
-			states = append(states, &state)
-		}
-	}
-	return states, nil
-}
-
-// UpdateServiceState updates a particular service state
-func UpdateServiceState(conn client.Connection, state *servicestate.ServiceState) error {
-	var node ServiceStateNode
-	path := servicepath(state.ServiceID, state.ID)
-	if err := conn.Get(path, &node); err != nil {
-		return err
-	}
-	node.ServiceState = state
-	return conn.Set(path, &node)
 }

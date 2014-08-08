@@ -77,6 +77,25 @@ type RunningService struct {
 	MonitoringProfile domain.MonitorProfile
 }
 
+type Status struct {
+	key   int
+	value string
+}
+
+func (s Status) String() string {
+	return s.value
+}
+
+var (
+	Starting = Status{1, "Starting"}
+	Pausing  = Status{2, "Pausing"}
+	Paused   = Status{3, "Paused"}
+	Resuming = Status{4, "Resuming"}
+	Running  = Status{5, "Running"}
+	Stopping = Status{6, "Stopping"}
+	Stopped  = Status{7, "Stopped"}
+)
+
 // An instantiation of a Snapshot request
 type SnapshotRequest struct {
 	ID            string
