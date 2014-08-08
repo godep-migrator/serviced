@@ -914,24 +914,8 @@ func (z *zkf) pauseService(svc *service.Service) error {
 		return err
 	}
 
-	var (
-		cancel = make(chan interface{})
-		done   = make(chan interface{})
-	)
-
-	go func() {
-		defer close(done)
-		err = zkservice.PausedService(cancel, poolBasedConn, svc.ID)
-	}()
-
-	// TODO: make me configurable
-	go func() {
-		defer close(cancel)
-		<-time.After(30 * time.Second)
-	}()
-
-	<-done
-	return err
+	// TODO: set timeout?
+	return zkservice.PausedService(nil, poolBasedConn, svc.ID)
 }
 
 func (z *zkf) getSvcStates(poolID string, serviceStates *[]*servicestate.ServiceState, serviceIDs ...string) error {
