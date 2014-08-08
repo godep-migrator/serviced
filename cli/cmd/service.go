@@ -366,10 +366,12 @@ func (c *ServicedCli) cmdServiceStatus(ctx *cli.Context) {
 				"ParentID":  svc.ParentServiceID,
 			}
 
-			if svc.DesiredState == service.SVCRun {
-				lines[iid]["Status"] = dao.Scheduled.String()
-			} else {
-				lines[iid]["Status"] = dao.Stopped.String()
+			if svc.Instances > 0 && len(statemap) == 0 {
+				if svc.DesiredState == service.SVCStop {
+					lines[iid]["Status"] = dao.Stopped.String()
+				} else {
+					lines[iid]["Status"] = dao.Scheduled.String()
+				}
 			}
 
 			for state, status := range statemap {

@@ -87,13 +87,14 @@ func (s Status) String() string {
 }
 
 var (
-	Starting = Status{1, "Starting"}
-	Pausing  = Status{2, "Pausing"}
-	Paused   = Status{3, "Paused"}
-	Resuming = Status{4, "Resuming"}
-	Running  = Status{5, "Running"}
-	Stopping = Status{6, "Stopping"}
-	Stopped  = Status{7, "Stopped"}
+	Scheduled = Status{1, "Scheduled"}
+	Starting  = Status{2, "Starting"}
+	Pausing   = Status{3, "Pausing"}
+	Paused    = Status{4, "Paused"}
+	Resuming  = Status{5, "Resuming"}
+	Running   = Status{6, "Running"}
+	Stopping  = Status{7, "Stopping"}
+	Stopped   = Status{8, "Stopped"}
 )
 
 // An instantiation of a Snapshot request
