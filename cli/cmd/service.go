@@ -377,6 +377,10 @@ func (c *ServicedCli) cmdServiceStatus(ctx *cli.Context) {
 				}
 			}
 		} else {
+			if svc.Instances > 1 {
+				delete(lines, iid)
+			}
+
 			for state, status := range statemap {
 				if svc.Instances > 1 {
 					iid = fmt.Sprintf("%s_%d", svc.ID, state.InstanceID)

@@ -261,6 +261,7 @@ func (l *HostStateListener) attachInstance(svc *service.Service, state *services
 }
 
 func (l *HostStateListener) pauseInstance(svc *service.Service, state *servicestate.ServiceState) error {
+	glog.Infof("Pausing service instance %s for service %s (%s)", state.ID, svc.Name, svc.ID)
 	if err := l.handler.PauseService(svc, state); err != nil {
 		glog.Errorf("Could not pause service instance %s: %s", state.ID, err)
 		return err

@@ -335,8 +335,7 @@ func (f *Facade) PauseService(ctx datastore.Context, serviceID string) error {
 			return err
 		}
 		glog.V(4).Infof("Facade.PauseService update service %v, %v: %v", svc.Name, svc.ID, err)
-		// block until all of the instances are paused (or timeout)
-		return zkAPI(f).pauseService(svc)
+		return nil
 	}
 
 	// traverse all the services
@@ -858,7 +857,6 @@ func getZKAPI(f *Facade) zkfuncs {
 type zkfuncs interface {
 	updateService(svc *service.Service) error
 	removeService(svc *service.Service) error
-	pauseService(svc *service.Service) error
 	getSvcStates(poolID string, serviceStates *[]*servicestate.ServiceState, serviceIds ...string) error
 	RegisterHost(h *host.Host) error
 	UnregisterHost(h *host.Host) error
@@ -905,17 +903,6 @@ func (z *zkf) removeService(svc *service.Service) error {
 
 	<-done
 	return err
-}
-
-func (z *zkf) pauseService(svc *service.Service) error {
-	poolBasedConn, err := zzk.GetBasePathConnection(zzk.GeneratePoolPath(svc.PoolID))
-	if err != nil {
-		glog.Errorf("Error getting a connection based on pool %s: %s", svc.PoolID, err)
-		return err
-	}
-
-	// TODO: set timeout?
-	return zkservice.PausedService(nil, poolBasedConn, svc.ID)
 }
 
 func (z *zkf) getSvcStates(poolID string, serviceStates *[]*servicestate.ServiceState, serviceIDs ...string) error {

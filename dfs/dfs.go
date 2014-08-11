@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -42,20 +43,56 @@ var (
 
 type DistributedFileSystem struct {
 	sync.Mutex
-	client dao.ControlPlane
-	facade *facade.Facade
+	client  dao.ControlPlane
+	facade  *facade.Facade
+	timeout time.Duration
 }
 
 // Initiates a New Distributed Filesystem Object given an implementation of a control plane object
-func NewDistributedFileSystem(client dao.ControlPlane, facade *facade.Facade) (*DistributedFileSystem, error) {
+func NewDistributedFileSystem(client dao.ControlPlane, facade *facade.Facade, timeout time.Duration) (*DistributedFileSystem, error) {
 	return &DistributedFileSystem{
-		client: client,
-		facade: facade,
+		client:  client,
+		facade:  facade,
+		timeout: timeout,
 	}, nil
+}
+
+// waitpause waits for a service's instances to pause
+func (d *DistributedFileSystem) waitpause(cancel <-chan interface{}, serviceID string) error {
+
+	for {
+		var states []*servicestate.ServiceState
+		if err := d.client.GetServiceStates(serviceID, &states); err != nil {
+			return err
+		}
+
+		paused := true
+		for _, state := range states {
+			if !state.IsPaused() {
+				paused = false
+				break
+			}
+		}
+		if paused {
+			return nil
+		}
+		select {
+		case <-time.After(time.Second):
+			// pass
+		case <-cancel:
+			return fmt.Errorf("waitpause timeout")
+		}
+	}
 }
 
 // Snapshots the DFS
 func (d *DistributedFileSystem) Snapshot(tenantId string) (string, error) {
+	cancel := make(chan interface{})
+	go func() {
+		defer close(cancel)
+		<-time.After(d.timeout)
+	}()
+
 	// Get the service
 	var myService service.Service
 	if err := d.client.GetService(tenantId, &myService); err != nil {
@@ -76,6 +113,12 @@ func (d *DistributedFileSystem) Snapshot(tenantId string) (string, error) {
 			if err := d.facade.PauseService(datastore.Get(), svc.ID); err != nil {
 				err = fmt.Errorf("could not pause %s (%s): %s", svc.Name, svc.ID, err)
 				glog.V(2).Infof("DistributedFileSystem.Snapshot service=%+v err=%s", svc.ID, err)
+				return "", err
+			}
+
+			if err := d.waitpause(cancel, svc.ID); err != nil {
+				err = fmt.Errorf("could not pause %s (%s): %s", svc.Name, svc.ID, err)
+				glog.V(2).Infof("DistributedFileSystem.Snapshot service=%s err %s", svc.ID, err)
 				return "", err
 			}
 		}

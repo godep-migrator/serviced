@@ -289,38 +289,6 @@ func StartService(conn client.Connection, serviceID string) error {
 	return conn.Set(path, &node)
 }
 
-// PausedService blocks untils a service is paused
-func PausedService(cancel <-chan interface{}, conn client.Connection, serviceID string) error {
-	for {
-		stateIDs, event, err := conn.ChildrenW(servicepath(serviceID))
-		if err != nil {
-			return err
-		}
-
-		var state servicestate.ServiceState
-		for _, stateID := range stateIDs {
-			// Check if the service instance was paused
-			if err := conn.Get(servicepath(serviceID, stateID), &ServiceStateNode{ServiceState: &state}); err != nil {
-				return err
-			}
-			if !state.IsPaused() {
-				break
-			}
-		}
-		if state.IsPaused() {
-			return nil
-		}
-
-		select {
-		case <-event:
-			// pass
-		case <-cancel:
-			glog.Infof("Gave up trying to pause service %s", serviceID)
-			return ErrShutdown
-		}
-	}
-}
-
 // StopService schedules a service to stop
 func StopService(conn client.Connection, serviceID string) error {
 	glog.Infof("Scheduling service %s to stop", serviceID)
