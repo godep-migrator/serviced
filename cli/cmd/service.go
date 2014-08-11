@@ -357,16 +357,16 @@ func (c *ServicedCli) cmdServiceStatus(ctx *cli.Context) {
 			return
 		}
 
-		if statemap != nil && len(statemap) > 0 {
-			iid := svc.ID
-			lines[iid] = map[string]string{
-				"ID":        svc.ID,
-				"ServiceID": svc.ID,
-				"Name":      svc.Name,
-				"ParentID":  svc.ParentServiceID,
-			}
+		iid := svc.ID
+		lines[iid] = map[string]string{
+			"ID":        svc.ID,
+			"ServiceID": svc.ID,
+			"Name":      svc.Name,
+			"ParentID":  svc.ParentServiceID,
+		}
 
-			if svc.Instances > 0 && len(statemap) == 0 {
+		if statemap == nil || len(statemap) == 0 {
+			if svc.Instances > 0 {
 				switch svc.DesiredState {
 				case service.SVCRun:
 					lines[iid]["Status"] = dao.Scheduled.String()
@@ -376,7 +376,7 @@ func (c *ServicedCli) cmdServiceStatus(ctx *cli.Context) {
 					lines[iid]["Status"] = dao.Stopped.String()
 				}
 			}
-
+		} else {
 			for state, status := range statemap {
 				if svc.Instances > 1 {
 					iid = fmt.Sprintf("%s_%d", svc.ID, state.InstanceID)

@@ -47,17 +47,17 @@ type ServiceState struct {
 }
 
 // IsRunning returns true when a service is currently running
-func (ss *ServiceState) IsRunning() bool {
+func (ss ServiceState) IsRunning() bool {
 	return ss.Started.UnixNano() > ss.Terminated.UnixNano()
 }
 
 // IsPaused returns true when a service is paused or is not running
-func (ss *ServiceState) IsPaused() bool {
+func (ss ServiceState) IsPaused() bool {
 	return !ss.IsRunning() || ss.Paused
 }
 
 // Uptime returns the time that the container is running in seconds
-func (ss *ServiceState) Uptime() time.Duration {
+func (ss ServiceState) Uptime() time.Duration {
 	if ss.IsRunning() {
 		return time.Since(ss.Started)
 	}

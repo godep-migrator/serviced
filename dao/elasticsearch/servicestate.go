@@ -5,6 +5,8 @@
 package elasticsearch
 
 import (
+	//	"errors"
+
 	"github.com/control-center/serviced/dao"
 	"github.com/control-center/serviced/datastore"
 	"github.com/control-center/serviced/domain/service"
@@ -111,7 +113,7 @@ func (this *ControlPlaneDao) StopRunningInstance(request dao.HostServiceRequest,
 	return nil
 }
 
-func (this *ControlPlaneDao) GetServiceStatus(serviceID string, statusmap *map[*servicestate.ServiceState]dao.Status) error {
+func (this *ControlPlaneDao) GetServiceStatus(serviceID string, status *map[*servicestate.ServiceState]dao.Status) error {
 	svc, err := this.facade.GetService(datastore.Get(), serviceID)
 	if err != nil {
 		glog.Errorf("Unable to get service %s: %s", serviceID, err)
@@ -124,7 +126,7 @@ func (this *ControlPlaneDao) GetServiceStatus(serviceID string, statusmap *map[*
 		return err
 	}
 
-	*statusmap, err = zkservice.GetServiceStatus(poolBasedConn, serviceID)
+	*status, err = zkservice.GetServiceStatus(poolBasedConn, svc.ID)
 	if err != nil {
 		glog.Errorf("zkservice.GetServiceStatus failed (conn: %+v serviceID: %s): %s", poolBasedConn, serviceID, err)
 		return err
