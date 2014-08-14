@@ -394,7 +394,7 @@ func (cp *ControlPlaneDao) Backup(backupsDirectory string, backupFilePath *strin
 	for imageID, imageTags := range imageIDTags {
 		filename := backupPath("images", fmt.Sprintf("%d.tar", i))
 		backupOutput <- fmt.Sprintf("Exporting docker image: %v", imageID)
-		if e := exportDockerImageToFile(imageID, filename); e != nil {
+		if e := exportDockerImageToFile(imageTags[0], filename); e != nil {
 			if e == dockerclient.ErrNoSuchImage {
 				glog.Infof("Docker image %s was referenced, but does not exist. Ignoring.", imageID)
 			} else {
