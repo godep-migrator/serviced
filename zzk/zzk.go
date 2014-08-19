@@ -17,6 +17,7 @@ import (
 	"errors"
 	"path"
 	"sync"
+	"time"
 
 	"github.com/control-center/serviced/coordinator/client"
 	"github.com/zenoss/glog"
@@ -151,6 +152,7 @@ func Listen(shutdown <-chan interface{}, ready chan<- error, l Listener) {
 		done       = make(chan string)
 		processing = make(map[string]interface{})
 		conn       = l.GetConnection()
+		timeout    = 15 * time.Second
 	)
 
 	glog.Infof("Starting a listener at %s", l.GetPath())
@@ -198,6 +200,9 @@ func Listen(shutdown <-chan interface{}, ready chan<- error, l Listener) {
 		}
 
 		select {
+		case <-time.After(timeout):
+			glog.V(2).Infof("Listener %s syncing with zookeeper", l.GetPath())
+			continue
 		case e := <-event:
 			if e.Type == client.EventNodeDeleted {
 				glog.V(1).Infof("Node %s has been removed; shutting down listener", l.GetPath())
