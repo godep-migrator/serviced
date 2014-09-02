@@ -83,14 +83,7 @@ controlplane.
             cacheFlushInterval: 3600000,
 
             // This cache will sync itself with localStorage
-            storageMode: 'memory',
-
-            // This callback is executed when the item specified by "key" expires.
-            // At this point you could retrieve a fresh value for "key"
-            // from the server and re-insert it into the cache.
-            onExpire: function (key, value) {
-                console.log("this guy expired", key, value);
-            }
+            storageMode: 'memory'
          });
     }]).
     /**
