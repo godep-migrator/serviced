@@ -13,20 +13,19 @@
         // only 1 healthcheck exists
         capacity: 1,
         // expire every 5 seconds
-        maxAge: 5000,
-        // delete expired stuff on request instead
-        // of aggressively checking for expiration
-        deleteOnExpire: "passive"
+        maxAge: 5000
       });
       
       var runningServicesCache = DSCacheFactory.createCache("runningServicesCache", {
         // store only 10 top level services (still has many children)
         capacity: 10,
         // expire every 5 seconds
-        maxAge: 5000,
-        // delete expired stuff on request instead
-        // of aggressively checking for expiration
-        deleteOnExpire: "passive"
+        maxAge: 5000
+      });
+      
+      var templatesCache = DSCacheFactory.createCache("templatesCache", {
+        capacity: 25,
+        maxAge: 15000
       });
 
       var cached_pools;
@@ -992,7 +991,7 @@
           },
 
           get_active_templates: function(callback){
-            $http.get('/templates/deploy/active').
+            $http.get('/templates/deploy/active', {cache: templatesCache}).
               success(function(data, status) {
                   if(DEBUG) console.log('Retrieved deployed template status.');
                   callback(data);

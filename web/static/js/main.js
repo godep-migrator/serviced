@@ -76,8 +76,9 @@ controlplane.
     }]).
     config(['DSCacheFactoryProvider', function(DSCacheFactory){
         DSCacheFactory.setCacheDefaults({
-            // Items will be actively deleted when they expire
-            deleteOnExpire: 'aggressive',
+            // Items will not be deleted until they are requested
+            // and have expired
+            deleteOnExpire: 'passive',
 
             // This cache will clear itself every hour
             cacheFlushInterval: 3600000,
