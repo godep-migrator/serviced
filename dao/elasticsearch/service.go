@@ -54,8 +54,8 @@ func (this *ControlPlaneDao) GetService(id string, myService *service.Service) e
 	}
 }
 
-// TODO FIXME no need for the request argument
-func (this *ControlPlaneDao) GetServices(request dao.EntityRequest, services *[]service.Service) error {
+// Get the services
+func (this *ControlPlaneDao) GetServices(request dao.ServiceRequest, services *[]service.Service) error {
 	if svcs, err := this.facade.GetServices(datastore.Get()); err == nil {
 		*services = svcs
 		return nil
@@ -75,7 +75,7 @@ func (this *ControlPlaneDao) FindChildService(request dao.FindChildRequest, serv
 }
 
 //
-func (this *ControlPlaneDao) GetTaggedServices(request dao.EntityRequest, services *[]service.Service) error {
+func (this *ControlPlaneDao) GetTaggedServices(request dao.ServiceRequest, services *[]service.Service) error {
 	if svcs, err := this.facade.GetTaggedServices(datastore.Get(), request); err == nil {
 		*services = svcs
 		return nil

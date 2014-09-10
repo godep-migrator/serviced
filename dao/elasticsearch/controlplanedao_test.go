@@ -289,7 +289,7 @@ func (dt *DaoTest) TestDao_GetServices(t *C) {
 	t.Assert(err, IsNil)
 
 	var result []service.Service
-	err = dt.Dao.GetServices(new(dao.EntityRequest), &result)
+	err = dt.Dao.GetServices(new(dao.ServiceRequest), &result)
 	t.Assert(err, IsNil)
 	t.Assert(len(result), Equals, 1)
 	//XXX the time.Time types fail comparison despite being equal...

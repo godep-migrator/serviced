@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -184,6 +185,38 @@ func (f *Facade) GetTaggedServices(ctx datastore.Context, request dao.EntityRequ
 		}
 		glog.V(2).Infof("Facade.GetTaggedServices: services=%v", results)
 		return results, nil
+	case dao.ServiceRequest:
+		glog.V(3).Infof("request: %+v", request)
+
+		// Get the tagged services
+		services, err := store.GetTaggedServices(ctx, request.(dao.ServiceRequest).Tags...)
+		if err != nil {
+			glog.Error("Facade.GetTaggedServices: err=", err)
+			return services, err
+		}
+		if err = f.fillOutServices(ctx, services); err != nil {
+			return services, err
+		}
+
+		// filter by the name provided
+		if request.(dao.ServiceRequest).NameRegex != "" {
+			services, err = filterByNameRegex(request.(dao.ServiceRequest).NameRegex, services)
+			if err != nil {
+				glog.Error("Facade.GetTaggedServices: err=", err)
+				return services, err
+			}
+		}
+
+		// filter by the tenantID provided
+		if request.(dao.ServiceRequest).TenantID != "" {
+			services, err = f.filterByTenantID(ctx, request.(dao.ServiceRequest).TenantID, services)
+			if err != nil {
+				glog.Error("Facade.GetTaggedServices: err=", err)
+				return services, err
+			}
+		}
+
+		return services, nil
 	default:
 		err := fmt.Errorf("Bad request type: %v", v)
 		glog.V(2).Info("Facade.GetTaggedServices: err=", err)
@@ -441,6 +474,41 @@ func (f *Facade) AssignIPs(ctx datastore.Context, assignmentRequest dao.Assignme
 
 	glog.Infof("All services requiring an explicit IP address (at f moment) from service: %v and down ... have been assigned: %s", assignmentRequest.ServiceID, assignmentRequest.IPAddress)
 	return nil
+}
+
+func (f *Facade) filterByTenantID(ctx datastore.Context, matchTenantID string, services []service.Service) ([]service.Service, error) {
+	matches := []service.Service{}
+	for _, service := range services {
+		localTenantID, err := f.GetTenantID(ctx, service.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		if localTenantID == matchTenantID {
+			glog.V(5).Infof("    Keeping service ID: %v (tenant ID: %v)", service.ID, localTenantID)
+			matches = append(matches, service)
+		}
+	}
+	glog.V(2).Infof("Returning %d services from tenantID: %v", len(matches), matchTenantID)
+	return matches, nil
+}
+
+func filterByNameRegex(nmregex string, services []service.Service) ([]service.Service, error) {
+	r, err := regexp.Compile(nmregex)
+	if err != nil {
+		glog.Errorf("Bad name regexp :%s", nmregex)
+		return nil, err
+	}
+
+	matches := []service.Service{}
+	for _, service := range services {
+		if r.MatchString(service.Name) {
+			glog.V(5).Infof("    Keeping service ID: %v (service name: %v)", service.ID, service.Name)
+			matches = append(matches, service)
+		}
+	}
+	glog.V(2).Infof("Returning %d services from %v", len(matches), nmregex)
+	return matches, nil
 }
 
 //getService is an internal method that returns a Service without filling in all related service data like address assignments
@@ -782,7 +850,7 @@ func updateTenants(tenantID string, svcIDs ...string) {
 	}
 }
 
-// GetTenantID calls its GetService function to get the tenantID
+// getTenantID calls its GetService function to get the tenantID
 func getTenantID(svcID string, gs service.GetService) (string, error) {
 	if tID, found := lookUpTenant(svcID); found {
 		return tID, nil
